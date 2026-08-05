@@ -39,6 +39,12 @@ public sealed class MainForm : Form
     private int _lastBaud;
     private bool _advancedVisible;
 
+    private readonly System.Windows.Forms.Timer _linkWatchdog = new() { Interval = 1000 };
+    private DateTime _lastFrameUtc = DateTime.UtcNow;
+    private bool _linkStale;
+    private bool _recovering;
+    private const int LinkSilenceMs = 4000;
+
     private readonly Dictionary<string, InfoTile> _tiles = new();
     private readonly List<Action> _retext = new();
 
@@ -49,6 +55,8 @@ public sealed class MainForm : Form
     private readonly ComboBox _cmbStopBits = new();
     private readonly Button _btnConnect = new();
     private readonly Label _lblConnDot = new();
+    private readonly Label _lblConnHelp = new();
+    private readonly ToolTip _connToolTip = new();
     private readonly Label _lblSerialNo = new();
     private string? _lastSerialNo;
 
@@ -103,6 +111,7 @@ public sealed class MainForm : Form
         _parser.ModeChanged += OnModeChanged;
         _parser.TestModeChanged += OnTestModeChanged;
         _captureTimer.Tick += OnCaptureTimerTick;
+        _linkWatchdog.Tick += OnLinkWatchdogTick;
 
         var root = new TableLayoutPanel
         {
@@ -130,9 +139,11 @@ public sealed class MainForm : Form
         status.Items.Add(_statusTest);
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_statusFrames);
-        Bind(() => _statusConn.Text = (_port is { IsOpen: true })
-            ? $"{Loc.T("status.connected")}: {_lastPortName} @ {_lastBaud}"
-            : Loc.T("status.disconnected"));
+        Bind(() => _statusConn.Text = _port is not { IsOpen: true }
+            ? Loc.T("status.disconnected")
+            : _linkStale
+                ? $"{Loc.T("status.connected")}: {_lastPortName} @ {_lastBaud} ({Loc.T("status.noSignal")})"
+                : $"{Loc.T("status.connected")}: {_lastPortName} @ {_lastBaud}");
         Bind(() => _statusMode.Text = $"{Loc.T("status.mode")}: {ModeText(_lastMode)}");
         Bind(() => _statusTest.Text = $"{Loc.T("status.test")}: {(_lastTestActive ? Loc.T("status.on") : Loc.T("status.off"))}");
         Bind(() => _statusFrames.Text = $"{Loc.T("status.frames")}: {_frameCount}");
@@ -267,7 +278,9 @@ public sealed class MainForm : Form
         flow.Controls.Add(_btnConnect);
 
         _lblConnDot.Text = string.Empty;
-        _lblConnDot.ForeColor = Color.Firebrick;
+        Bind(() => _lblConnDot.ForeColor = _port is not { IsOpen: true }
+            ? Color.Firebrick
+            : _linkStale ? Color.DarkOrange : Color.ForestGreen);
         _lblConnDot.AutoSize = false;
         _lblConnDot.Size = new Size(_btnConnect.Height, _btnConnect.Height);
         _lblConnDot.Margin = new Padding(6, 0, 0, 0);
@@ -281,6 +294,27 @@ public sealed class MainForm : Form
         };
         _lblConnDot.ForeColorChanged += (_, _) => _lblConnDot.Invalidate();
         flow.Controls.Add(_lblConnDot);
+
+        _lblConnHelp.Text = "?";
+        _lblConnHelp.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        _lblConnHelp.ForeColor = Color.DimGray;
+        _lblConnHelp.AutoSize = false;
+        _lblConnHelp.Size = new Size(20, 20);
+        _lblConnHelp.Margin = new Padding(4, 12, 0, 0);
+        _lblConnHelp.TextAlign = ContentAlignment.MiddleCenter;
+        _lblConnHelp.Cursor = Cursors.Help;
+        _lblConnHelp.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var rect = new Rectangle(1, 1, _lblConnHelp.Width - 3, _lblConnHelp.Height - 3);
+            using var pen = new Pen(Color.DimGray, 1.2f);
+            e.Graphics.DrawEllipse(pen, rect);
+        };
+        _connToolTip.AutoPopDelay = 20000;
+        _connToolTip.InitialDelay = 300;
+        _connToolTip.ReshowDelay = 100;
+        Bind(() => _connToolTip.SetToolTip(_lblConnHelp, Loc.T("conn.statusHelp")));
+        flow.Controls.Add(_lblConnHelp);
 
         group.Controls.Add(flow);
         return group;
@@ -344,12 +378,22 @@ public sealed class MainForm : Form
 
         _lastPortName = portName;
         _lastBaud = baud;
-        _lblConnDot.ForeColor = Color.ForestGreen;
+        _lastFrameUtc = DateTime.UtcNow;
+        _linkStale = false;
+        _recovering = false;
+        _linkWatchdog.Start();
         SetConnectionControlsEnabled(false);
         RefreshTexts();
         AppendTerminal($"--- connected to {portName} @ {baud} {parity} {dataBits}{StopBitsShort(stopBits)} ---\r\n", Color.Gray);
 
         await AutoEnterCommandModeAsync();
+
+        if (_port is { IsOpen: true } && _lastMode != LinkMode.Command)
+        {
+            _linkStale = true;
+            RefreshTexts();
+            _ = RecoveryLoopAsync();
+        }
     }
 
     private static string StopBitsShort(StopBits s) => s switch
@@ -458,10 +502,57 @@ public sealed class MainForm : Form
         _lastMode = LinkMode.Unknown;
         _lastTestActive = false;
         _lastSerialNo = null;
-        _lblConnDot.ForeColor = Color.Firebrick;
+        _linkWatchdog.Stop();
+        _linkStale = false;
+        _recovering = false;
         SetConnectionControlsEnabled(true);
         RefreshTexts();
         AppendTerminal("--- disconnected ---\r\n", Color.Gray);
+    }
+
+    private void OnLinkWatchdogTick(object? sender, EventArgs e)
+    {
+        if (_port is { IsOpen: false })
+        {
+            HandlePortLost(new IOException("Serial port closed unexpectedly"));
+            return;
+        }
+        if (_port is not { IsOpen: true }) return;
+        if (_queryInProgress || _linkStale || !_lastTestActive) return;
+        if ((DateTime.UtcNow - _lastFrameUtc).TotalMilliseconds < LinkSilenceMs) return;
+
+        _linkStale = true;
+        _lastMode = LinkMode.Unknown;
+        _lastTestActive = false;
+        AppendTerminal("--- no signal from device (possible power loss) ---\r\n", Color.Orange);
+        RefreshTexts();
+        _ = RecoveryLoopAsync();
+    }
+
+    private async Task RecoveryLoopAsync()
+    {
+        if (_recovering) return;
+        _recovering = true;
+        try
+        {
+            while (_linkStale && _port is { IsOpen: true })
+            {
+                await AutoEnterCommandModeAsync();
+                if (!_linkStale) break;
+                await Task.Delay(1500);
+            }
+        }
+        finally
+        {
+            _recovering = false;
+        }
+    }
+
+    private void HandlePortLost(Exception ex)
+    {
+        if (_port is null) return;
+        AppendTerminal($"--- device disconnected: {ex.Message} ---\r\n", Color.IndianRed);
+        ClosePort();
     }
 
     private void SetConnectionControlsEnabled(bool enabled)
@@ -1110,6 +1201,11 @@ public sealed class MainForm : Form
 
     private void SendRaw(string command)
     {
+        if (_port is { IsOpen: false })
+        {
+            HandlePortLost(new IOException("Serial port closed unexpectedly"));
+            return;
+        }
         if (_port is not { IsOpen: true })
         {
             AppendTerminal("(not connected - command not sent)\r\n", Color.IndianRed);
@@ -1121,6 +1217,10 @@ public sealed class MainForm : Form
             _port.Write(bytes, 0, bytes.Length);
             AppendTerminal("» " + command + "\r\n", Color.DeepSkyBlue);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            HandlePortLost(ex);
+        }
         catch (Exception ex)
         {
             AppendTerminal($"(send failed: {ex.Message})\r\n", Color.IndianRed);
@@ -1129,6 +1229,14 @@ public sealed class MainForm : Form
 
     private void OnPortDataReceived(object sender, SerialDataReceivedEventArgs e)
     {
+        if (_port is { IsOpen: false })
+        {
+            if (IsHandleCreated && !IsDisposed)
+            {
+                BeginInvoke(() => HandlePortLost(new IOException("Serial port closed unexpectedly")));
+            }
+            return;
+        }
         if (_port is not { IsOpen: true } port) return;
         try
         {
@@ -1153,6 +1261,13 @@ public sealed class MainForm : Form
                         _captureTimer.Start();
                     }
                 });
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (IsHandleCreated && !IsDisposed)
+            {
+                BeginInvoke(() => HandlePortLost(ex));
             }
         }
         catch (Exception)
@@ -1245,6 +1360,12 @@ public sealed class MainForm : Form
         if (!IsHandleCreated || IsDisposed) return;
         BeginInvoke(() =>
         {
+            _lastFrameUtc = DateTime.UtcNow;
+            if (_linkStale)
+            {
+                _linkStale = false;
+                AppendTerminal("--- signal restored ---\r\n", Color.Gray);
+            }
             if (!_lastTestActive) OnTestModeChanged(true);
 
             _lastFrame = f;
@@ -1289,6 +1410,7 @@ public sealed class MainForm : Form
         BeginInvoke(() =>
         {
             _lastTestActive = active;
+            if (active) _lastFrameUtc = DateTime.UtcNow;
             _btnTestToggle.Text = active ? "Stop Test (AT+T)" : "Start Test (AT+T)";
             RefreshTexts();
         });

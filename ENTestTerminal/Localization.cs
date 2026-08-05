@@ -25,6 +25,17 @@ public static class Loc
         ["conn.stopbits"] = ("Dur Biti:", "Stop bits:"),
         ["conn.connect"] = ("Bağlan", "Connect"),
         ["conn.disconnect"] = ("Bağlantıyı Kes", "Disconnect"),
+        ["conn.statusHelp"] = (
+            "Bağlantı durumu ışığı:\n" +
+            "• Kırmızı — Bağlı değil.\n" +
+            "• Yeşil — Bağlı, cihaz normal yanıt veriyor.\n" +
+            "• Turuncu — Bağlı, ancak cihazdan sinyal alınamıyor (güç kaybı olabilir).\n" +
+            "   Uygulama otomatik olarak yeniden bağlanmayı deniyor.",
+            "Connection status light:\n" +
+            "• Red — Disconnected.\n" +
+            "• Green — Connected, device responding normally.\n" +
+            "• Orange — Connected, but no signal from the device (possible power loss).\n" +
+            "   The app is automatically retrying the handshake."),
 
         ["parity.none"] = ("Yok", "None"),
         ["parity.odd"] = ("Tek", "Odd"),
@@ -105,6 +116,7 @@ public static class Loc
 
         ["status.disconnected"] = ("Bağlı Değil", "Disconnected"),
         ["status.connected"] = ("Bağlı", "Connected"),
+        ["status.noSignal"] = ("Sinyal Yok", "No Signal"),
         ["status.mode"] = ("Mod", "Mode"),
         ["status.modeUnknown"] = ("Bilinmiyor", "Unknown"),
         ["status.modeData"] = ("Veri", "Data"),
