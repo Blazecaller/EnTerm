@@ -26,7 +26,7 @@ public sealed class MainForm : Form
     private static readonly Color WindowGray = Color.FromArgb(232, 233, 236);
     private static readonly Color PanelGray = Color.FromArgb(244, 244, 246);
 
-    private const int BaseWidth = 1180;
+    private const int BaseWidth = 1320;
     private const int BaseHeight = 820;
     private const int AdvancedWidth = 480;
 
@@ -48,31 +48,32 @@ public sealed class MainForm : Form
     private readonly Dictionary<string, InfoTile> _tiles = new();
     private readonly List<Action> _retext = new();
 
-    private readonly ComboBox _cmbPort = new();
-    private readonly ComboBox _cmbBaud = new();
-    private readonly ComboBox _cmbParity = new();
-    private readonly ComboBox _cmbDataBits = new();
-    private readonly ComboBox _cmbStopBits = new();
-    private readonly Button _btnConnect = new();
+    private readonly ToolStripComboBox _cmbPort = new();
+    private readonly ToolStripComboBox _cmbBaud = new();
+    private readonly ToolStripComboBox _cmbParity = new();
+    private readonly ToolStripComboBox _cmbDataBits = new();
+    private readonly ToolStripComboBox _cmbStopBits = new();
+    private readonly ToolStripButton _btnConnect = new();
     private readonly Label _lblConnDot = new();
     private readonly Label _lblConnHelp = new();
     private readonly ToolTip _connToolTip = new();
     private readonly Label _lblSerialNo = new();
     private string? _lastSerialNo;
 
-    private readonly ComboBox _cmbSensorId = new();
-    private readonly ComboBox _cmbSensorAction = new();
-    private readonly ComboBox _cmbBaudSet = new();
-    private readonly TextBox _txtSerialSet = new();
+    private readonly ToolStripComboBox _cmbSensorId = new();
+    private readonly ToolStripComboBox _cmbSensorAction = new();
+    private readonly ToolStripComboBox _cmbBaudSet = new();
+    private readonly ToolStripTextBox _txtSerialSet = new();
 
-    private readonly Button _btnTestToggle = new();
+    private readonly ToolStripButton _btnTestToggle = new();
 
     private Panel _basicPage = null!;
     private Panel _calibrationPage = null!;
 
     private readonly SplitContainer _mainSplit = new();
     private bool _splitterInitialized;
-    private readonly Button _btnAdvancedToggle = new();
+    private readonly ToolStripButton _btnAdvancedToggle = new();
+    private readonly ToolStrip _atStrip = new();
 
     private readonly RichTextBox _terminal = new();
     private readonly TextBox _txtSend = new();
@@ -98,7 +99,7 @@ public sealed class MainForm : Form
         MinimumSize = new Size(1080, 640);
         Size = new Size(BaseWidth, BaseHeight);
         BackColor = WindowGray;
-        Font = new Font("Segoe UI", 9f);
+        Font = AppFonts.FormDefault;
         try
         {
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -117,19 +118,27 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = WindowGray,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        root.Controls.Add(BuildLanguageBar(), 0, 0);
-        root.Controls.Add(BuildConnectionPanel(), 0, 1);
-        root.Controls.Add(BuildBasicCommandsBar(), 0, 2);
-        root.Controls.Add(BuildMainContent(), 0, 3);
+        var languageBar = BuildLanguageBar();
+        var mainContent = BuildMainContent();
+        var connStrip = BuildConnectionStrip();
+        var commandsStrip = BuildCommandsStrip();
+        var atStrip = BuildAtStrip();
+
+        root.Controls.Add(languageBar, 0, 0);
+        root.Controls.Add(connStrip, 0, 1);
+        root.Controls.Add(commandsStrip, 0, 2);
+        root.Controls.Add(atStrip, 0, 3);
+        root.Controls.Add(mainContent, 0, 4);
 
         var status = new StatusStrip();
         status.Items.Add(_statusConn);
@@ -148,6 +157,9 @@ public sealed class MainForm : Form
         Bind(() => _statusTest.Text = $"{Loc.T("status.test")}: {(_lastTestActive ? Loc.T("status.on") : Loc.T("status.off"))}");
         Bind(() => _statusFrames.Text = $"{Loc.T("status.frames")}: {_frameCount}");
 
+        _menuStrip.Font = AppFonts.MenuStrip;
+        _menuStrip.Renderer = new ButtonFrameRenderer();
+
         _btnLanguage.DisplayStyle = ToolStripItemDisplayStyle.Text;
         Bind(() => _btnLanguage.Text = Loc.Current == AppLanguage.Turkish ? "EN" : "TR");
         _btnLanguage.Click += (_, _) =>
@@ -156,6 +168,7 @@ public sealed class MainForm : Form
             RefreshTexts();
         };
         _menuStrip.Items.Add(_btnLanguage);
+
         MainMenuStrip = _menuStrip;
 
         Controls.Add(root);
@@ -198,92 +211,35 @@ public sealed class MainForm : Form
 
         _lblSerialNo.Dock = DockStyle.Fill;
         _lblSerialNo.TextAlign = ContentAlignment.MiddleCenter;
-        _lblSerialNo.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        _lblSerialNo.Font = AppFonts.SerialNumberBanner;
         Bind(() => _lblSerialNo.Text = _lastSerialNo is { } sn ? $"{Loc.T("popup.serialNo")}: {sn}" : string.Empty);
         panel.Controls.Add(_lblSerialNo);
 
         return panel;
     }
 
-    private GroupBox BuildConnectionPanel()
+    private ToolStrip BuildConnectionStrip()
     {
-        var group = new GroupBox { Dock = DockStyle.Fill, Padding = new Padding(6) };
-        Bind(() => group.Text = Loc.T("conn.title"));
-        var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true };
-
-        var lblPort = LabelFor(); Bind(() => lblPort.Text = Loc.T("conn.port"));
-        flow.Controls.Add(lblPort);
-        _cmbPort.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbPort.Width = 90;
-        flow.Controls.Add(_cmbPort);
-
-        var btnRefresh = new Button { AutoSize = true };
-        Bind(() => btnRefresh.Text = Loc.T("conn.refresh"));
-        btnRefresh.Click += (_, _) => RefreshPorts();
-        flow.Controls.Add(btnRefresh);
-
-        flow.Controls.Add(Spacer());
-        var lblBaud = LabelFor(); Bind(() => lblBaud.Text = Loc.T("conn.baud"));
-        flow.Controls.Add(lblBaud);
-        _cmbBaud.DropDownStyle = ComboBoxStyle.DropDown;
-        _cmbBaud.Width = 80;
-        _cmbBaud.Items.AddRange(new object[] { 9600, 19200, 38400, 57600, 115200 });
-        _cmbBaud.SelectedItem = 9600;
-        flow.Controls.Add(_cmbBaud);
-
-        flow.Controls.Add(Spacer());
-        var lblParity = LabelFor(); Bind(() => lblParity.Text = Loc.T("conn.parity"));
-        flow.Controls.Add(lblParity);
-        _cmbParity.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbParity.Width = 90;
-        Bind(() =>
+        var strip = new ToolStrip
         {
-            int sel = Math.Max(_cmbParity.SelectedIndex, 0);
-            _cmbParity.Items.Clear();
-            foreach (var k in ParityKeys) _cmbParity.Items.Add(Loc.T(k));
-            _cmbParity.SelectedIndex = sel;
-        });
-        flow.Controls.Add(_cmbParity);
+            Dock = DockStyle.Fill,
+            GripStyle = ToolStripGripStyle.Hidden,
+            Font = AppFonts.ToolbarRowText,
+            Renderer = new ButtonFrameRenderer(),
+        };
 
-        flow.Controls.Add(Spacer());
-        var lblDataBits = LabelFor(); Bind(() => lblDataBits.Text = Loc.T("conn.databits"));
-        flow.Controls.Add(lblDataBits);
-        _cmbDataBits.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbDataBits.Width = 50;
-        _cmbDataBits.Items.AddRange(new object[] { 7, 8 });
-        _cmbDataBits.SelectedItem = 8;
-        flow.Controls.Add(_cmbDataBits);
-
-        flow.Controls.Add(Spacer());
-        var lblStopBits = LabelFor(); Bind(() => lblStopBits.Text = Loc.T("conn.stopbits"));
-        flow.Controls.Add(lblStopBits);
-        _cmbStopBits.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbStopBits.Width = 55;
-        _cmbStopBits.Items.AddRange(StopBitsLabels);
-        _cmbStopBits.SelectedIndex = 0;
-        flow.Controls.Add(_cmbStopBits);
-
-        flow.Controls.Add(Spacer());
-        _btnConnect.AutoSize = false;
-        _btnConnect.Size = new Size(150, 44);
-        _btnConnect.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-        _btnConnect.FlatStyle = FlatStyle.Flat;
-        _btnConnect.FlatAppearance.BorderSize = 3;
-        _btnConnect.FlatAppearance.BorderColor = Color.FromArgb(0, 153, 255);
-        _btnConnect.FlatAppearance.MouseOverBackColor = Color.FromArgb(214, 236, 255);
-        _btnConnect.FlatAppearance.MouseDownBackColor = Color.FromArgb(179, 219, 255);
-        _btnConnect.BackColor = Color.FromArgb(235, 246, 255);
+        _btnConnect.Font = AppFonts.ToolbarRowTitle;
+        _btnConnect.DisplayStyle = ToolStripItemDisplayStyle.Text;
         Bind(() => _btnConnect.Text = (_port is { IsOpen: true }) ? Loc.T("conn.disconnect") : Loc.T("conn.connect"));
         _btnConnect.Click += (_, _) => ToggleConnection();
-        flow.Controls.Add(_btnConnect);
+        strip.Items.Add(_btnConnect);
 
         _lblConnDot.Text = string.Empty;
         Bind(() => _lblConnDot.ForeColor = _port is not { IsOpen: true }
             ? Color.Firebrick
             : _linkStale ? Color.DarkOrange : Color.ForestGreen);
         _lblConnDot.AutoSize = false;
-        _lblConnDot.Size = new Size(_btnConnect.Height, _btnConnect.Height);
-        _lblConnDot.Margin = new Padding(6, 0, 0, 0);
+        _lblConnDot.Size = new Size(26, 26);
         _lblConnDot.Paint += (_, e) =>
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -293,14 +249,13 @@ public sealed class MainForm : Form
             e.Graphics.FillEllipse(brush, rect);
         };
         _lblConnDot.ForeColorChanged += (_, _) => _lblConnDot.Invalidate();
-        flow.Controls.Add(_lblConnDot);
+        strip.Items.Add(new ToolStripControlHost(_lblConnDot) { AutoSize = false, Size = _lblConnDot.Size, Margin = new Padding(6, 2, 0, 0) });
 
         _lblConnHelp.Text = "?";
-        _lblConnHelp.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        _lblConnHelp.Font = AppFonts.ConnectionHelpIcon;
         _lblConnHelp.ForeColor = Color.DimGray;
         _lblConnHelp.AutoSize = false;
-        _lblConnHelp.Size = new Size(20, 20);
-        _lblConnHelp.Margin = new Padding(4, 12, 0, 0);
+        _lblConnHelp.Size = new Size(26, 26);
         _lblConnHelp.TextAlign = ContentAlignment.MiddleCenter;
         _lblConnHelp.Cursor = Cursors.Help;
         _lblConnHelp.Paint += (_, e) =>
@@ -313,11 +268,82 @@ public sealed class MainForm : Form
         _connToolTip.AutoPopDelay = 20000;
         _connToolTip.InitialDelay = 300;
         _connToolTip.ReshowDelay = 100;
+        _connToolTip.OwnerDraw = true;
+        _connToolTip.Popup += (_, e) =>
+        {
+            string text = _connToolTip.GetToolTip(e.AssociatedControl) ?? string.Empty;
+            Size textSize = TextRenderer.MeasureText(text, AppFonts.ConnectionHelpTooltip);
+            e.ToolTipSize = new Size(textSize.Width + 20, textSize.Height + 16);
+        };
+        _connToolTip.Draw += (_, e) =>
+        {
+            e.DrawBackground();
+            e.DrawBorder();
+            var textBounds = new Rectangle(e.Bounds.X + 10, e.Bounds.Y + 8, e.Bounds.Width - 20, e.Bounds.Height - 16);
+            TextRenderer.DrawText(e.Graphics, e.ToolTipText, AppFonts.ConnectionHelpTooltip, textBounds, SystemColors.InfoText, TextFormatFlags.Left | TextFormatFlags.Top);
+        };
         Bind(() => _connToolTip.SetToolTip(_lblConnHelp, Loc.T("conn.statusHelp")));
-        flow.Controls.Add(_lblConnHelp);
+        strip.Items.Add(new ToolStripControlHost(_lblConnHelp) { AutoSize = false, Size = _lblConnHelp.Size, Margin = new Padding(4, 4, 0, 0) });
 
-        group.Controls.Add(flow);
-        return group;
+        strip.Items.Add(new ToolStripSeparator());
+
+        var lblPort = new ToolStripLabel(); Bind(() => lblPort.Text = Loc.T("conn.port"));
+        strip.Items.Add(lblPort);
+        _cmbPort.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbPort.Font = AppFonts.ToolbarRowDropdown;
+        strip.Items.Add(_cmbPort);
+
+        var btnRefresh = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
+        Bind(() => btnRefresh.Text = Loc.T("conn.refresh"));
+        btnRefresh.Click += (_, _) => RefreshPorts();
+        strip.Items.Add(btnRefresh);
+
+        strip.Items.Add(new ToolStripSeparator());
+        var lblBaud = new ToolStripLabel(); Bind(() => lblBaud.Text = Loc.T("conn.baud"));
+        strip.Items.Add(lblBaud);
+        _cmbBaud.DropDownStyle = ComboBoxStyle.DropDown;
+        _cmbBaud.Font = AppFonts.ToolbarRowDropdown;
+        _cmbBaud.Items.AddRange(new object[] { 9600, 19200, 38400, 57600, 115200 });
+        _cmbBaud.SelectedItem = 9600;
+        AutoSizeCombo(_cmbBaud);
+        strip.Items.Add(_cmbBaud);
+
+        strip.Items.Add(new ToolStripSeparator());
+        var lblParity = new ToolStripLabel(); Bind(() => lblParity.Text = Loc.T("conn.parity"));
+        strip.Items.Add(lblParity);
+        _cmbParity.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbParity.Font = AppFonts.ToolbarRowDropdown;
+        Bind(() =>
+        {
+            int sel = Math.Max(_cmbParity.SelectedIndex, 0);
+            _cmbParity.Items.Clear();
+            foreach (var k in ParityKeys) _cmbParity.Items.Add(Loc.T(k));
+            _cmbParity.SelectedIndex = sel;
+            AutoSizeCombo(_cmbParity);
+        });
+        strip.Items.Add(_cmbParity);
+
+        strip.Items.Add(new ToolStripSeparator());
+        var lblDataBits = new ToolStripLabel(); Bind(() => lblDataBits.Text = Loc.T("conn.databits"));
+        strip.Items.Add(lblDataBits);
+        _cmbDataBits.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbDataBits.Font = AppFonts.ToolbarRowDropdown;
+        _cmbDataBits.Items.AddRange(new object[] { 7, 8 });
+        _cmbDataBits.SelectedItem = 8;
+        AutoSizeCombo(_cmbDataBits);
+        strip.Items.Add(_cmbDataBits);
+
+        strip.Items.Add(new ToolStripSeparator());
+        var lblStopBits = new ToolStripLabel(); Bind(() => lblStopBits.Text = Loc.T("conn.stopbits"));
+        strip.Items.Add(lblStopBits);
+        _cmbStopBits.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbStopBits.Font = AppFonts.ToolbarRowDropdown;
+        _cmbStopBits.Items.AddRange(StopBitsLabels);
+        _cmbStopBits.SelectedIndex = 0;
+        AutoSizeCombo(_cmbStopBits);
+        strip.Items.Add(_cmbStopBits);
+
+        return strip;
     }
 
     private void RefreshPorts()
@@ -333,6 +359,18 @@ public sealed class MainForm : Form
         {
             _cmbPort.SelectedIndex = 0;
         }
+        AutoSizeCombo(_cmbPort);
+    }
+
+    private static void AutoSizeCombo(ToolStripComboBox combo, int minWidth = 120)
+    {
+        int widest = 0;
+        foreach (var item in combo.Items)
+        {
+            int w = TextRenderer.MeasureText(item?.ToString() ?? string.Empty, combo.Font).Width;
+            if (w > widest) widest = w;
+        }
+        combo.Width = Math.Max(widest + 40, minWidth);
     }
 
     private async void ToggleConnection()
@@ -564,29 +602,22 @@ public sealed class MainForm : Form
         _cmbStopBits.Enabled = enabled;
     }
 
-    private Control BuildBasicCommandsBar()
+    private ToolStrip BuildCommandsStrip()
     {
-        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var strip = new ToolStrip
+        {
+            Dock = DockStyle.Fill,
+            GripStyle = ToolStripGripStyle.Hidden,
+            Font = AppFonts.ToolbarRowText,
+            Renderer = new ButtonFrameRenderer(),
+        };
 
-        var group = new GroupBox { Dock = DockStyle.Fill, Padding = new Padding(6, 4, 6, 4) };
-        Bind(() => group.Text = Loc.T("basic.title"));
-
-        var stack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-        stack.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        stack.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-
-        var row1 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var row2 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var tightMargin = new Padding(2, 2, 2, 2);
-
-        var lblSensor = LabelFor(); Bind(() => lblSensor.Text = Loc.T("basic.sensor"));
-        lblSensor.Margin = tightMargin;
-        row1.Controls.Add(lblSensor);
+        var lblSensor = new ToolStripLabel(); Bind(() => lblSensor.Text = Loc.T("basic.sensor"));
+        strip.Items.Add(lblSensor);
         _cmbSensorId.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbSensorId.Width = 175;
-        _cmbSensorId.Margin = tightMargin;
+        _cmbSensorId.Font = AppFonts.ToolbarRowDropdown;
+        _cmbSensorId.AutoSize = false;
+        _cmbSensorId.Width = 280;
         Bind(() =>
         {
             int sel = Math.Max(_cmbSensorId.SelectedIndex, 0);
@@ -594,11 +625,12 @@ public sealed class MainForm : Form
             foreach (var (id, nameKey) in SensorIds) _cmbSensorId.Items.Add($"{id} - {Loc.T(nameKey)}");
             _cmbSensorId.SelectedIndex = sel;
         });
-        row1.Controls.Add(_cmbSensorId);
+        strip.Items.Add(_cmbSensorId);
 
         _cmbSensorAction.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbSensorAction.Width = 80;
-        _cmbSensorAction.Margin = tightMargin;
+        _cmbSensorAction.Font = AppFonts.ToolbarRowDropdown;
+        _cmbSensorAction.AutoSize = false;
+        _cmbSensorAction.Width = 90;
         Bind(() =>
         {
             int sel = Math.Max(_cmbSensorAction.SelectedIndex, 0);
@@ -607,9 +639,9 @@ public sealed class MainForm : Form
             _cmbSensorAction.Items.Add(Loc.T("basic.off"));
             _cmbSensorAction.SelectedIndex = sel;
         });
-        row1.Controls.Add(_cmbSensorAction);
+        strip.Items.Add(_cmbSensorAction);
 
-        var btnApply = new Button { AutoSize = true, Margin = tightMargin };
+        var btnApply = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
         Bind(() => btnApply.Text = Loc.T("basic.apply"));
         btnApply.Click += (_, _) =>
         {
@@ -617,16 +649,14 @@ public sealed class MainForm : Form
             string action = SensorActionCommands[_cmbSensorAction.SelectedIndex];
             RunQuery($"AT+C={id:D2},{action}", "popup.sensorControl", PassthroughResponse);
         };
-        row1.Controls.Add(btnApply);
+        strip.Items.Add(btnApply);
 
-        row1.Controls.Add(Spacer());
-        var lblSerial = LabelFor(); Bind(() => lblSerial.Text = Loc.T("basic.serialLabel"));
-        lblSerial.Margin = tightMargin;
-        row1.Controls.Add(lblSerial);
+        strip.Items.Add(new ToolStripSeparator());
+        var lblSerial = new ToolStripLabel(); Bind(() => lblSerial.Text = Loc.T("basic.serialLabel"));
+        strip.Items.Add(lblSerial);
         _txtSerialSet.Width = 80;
-        _txtSerialSet.Margin = tightMargin;
-        row1.Controls.Add(_txtSerialSet);
-        var btnSetSerial = new Button { AutoSize = true, Margin = tightMargin };
+        strip.Items.Add(_txtSerialSet);
+        var btnSetSerial = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
         Bind(() => btnSetSerial.Text = Loc.T("basic.setSerial"));
         btnSetSerial.Click += (_, _) =>
         {
@@ -639,47 +669,52 @@ public sealed class MainForm : Form
                 MessageBox.Show(this, Loc.T("msg.invalidSerial"), Loc.T("msg.invalidSerialTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         };
-        row1.Controls.Add(btnSetSerial);
+        strip.Items.Add(btnSetSerial);
 
-        row1.Controls.Add(Spacer());
+        strip.Items.Add(new ToolStripSeparator());
         _cmbBaudSet.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbBaudSet.Width = 100;
-        _cmbBaudSet.Margin = tightMargin;
+        _cmbBaudSet.Font = AppFonts.ToolbarRowDropdown;
         _cmbBaudSet.Items.AddRange(new object[] { "9600", "19200", "38400", "57600", "115200" });
         _cmbBaudSet.SelectedIndex = 0;
-        row1.Controls.Add(_cmbBaudSet);
-        var btnSetBaud = new Button { AutoSize = true, Margin = tightMargin };
+        AutoSizeCombo(_cmbBaudSet);
+        strip.Items.Add(_cmbBaudSet);
+        var btnSetBaud = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
         Bind(() => btnSetBaud.Text = Loc.T("basic.setBaud"));
         btnSetBaud.Click += (_, _) => RunQuery($"AT+SB={_cmbBaudSet.SelectedIndex}", "basic.setBaud", PassthroughResponse);
-        row1.Controls.Add(btnSetBaud);
+        strip.Items.Add(btnSetBaud);
 
-        var btnSensorList = new Button { AutoSize = true, Margin = tightMargin };
+        strip.Items.Add(new ToolStripSeparator());
+        var btnSensorList = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
         Bind(() => btnSensorList.Text = Loc.T("basic.showSensorList"));
         btnSensorList.Click += (_, _) => RunQuery("AT+C?", "popup.sensorList", ParseSensorListResponse);
-        row2.Controls.Add(btnSensorList);
+        strip.Items.Add(btnSensorList);
 
-        var btnStatus = new Button { AutoSize = true, Margin = tightMargin };
+        var btnStatus = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
         Bind(() => btnStatus.Text = Loc.T("basic.systemStatus"));
         btnStatus.Click += (_, _) => RunQuery("AT+S?", "popup.status", ParseStatusResponse);
-        row2.Controls.Add(btnStatus);
+        strip.Items.Add(btnStatus);
 
-        var btnHelp = new Button { AutoSize = true, Margin = tightMargin };
+        var btnHelp = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
         Bind(() => btnHelp.Text = Loc.T("basic.help"));
         btnHelp.Click += (_, _) => RunQuery("AT?", "popup.help", ParseHelpResponse);
-        row2.Controls.Add(btnHelp);
+        strip.Items.Add(btnHelp);
 
-        stack.Controls.Add(row1, 0, 0);
-        stack.Controls.Add(row2, 0, 1);
-        group.Controls.Add(stack);
-
-        _btnAdvancedToggle.AutoSize = true;
-        _btnAdvancedToggle.Dock = DockStyle.Right;
+        strip.Items.Add(new ToolStripSeparator());
+        _btnAdvancedToggle.DisplayStyle = ToolStripItemDisplayStyle.Text;
         Bind(() => _btnAdvancedToggle.Text = _advancedVisible ? Loc.T("basic.advancedHide") : Loc.T("basic.advancedShow"));
         _btnAdvancedToggle.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
+        strip.Items.Add(_btnAdvancedToggle);
 
-        table.Controls.Add(group, 0, 0);
-        table.Controls.Add(_btnAdvancedToggle, 1, 0);
-        return table;
+        var btnCalibToggle = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
+        Bind(() => btnCalibToggle.Text = _calibrationPage.Visible ? Loc.T("nav.back") : Loc.T("nav.calibration"));
+        btnCalibToggle.Click += (_, _) =>
+        {
+            if (_calibrationPage.Visible) ShowBasicPage(); else ShowCalibrationPage();
+            RefreshTexts();
+        };
+        strip.Items.Add(btnCalibToggle);
+
+        return strip;
     }
 
     private async Task RunCommand(string command, string? titleKey, Func<string, string?>? parse)
@@ -894,10 +929,7 @@ public sealed class MainForm : Form
 
         var terminalPanel = BuildTerminalPanel();
         terminalPanel.Dock = DockStyle.Fill;
-        var atPanel = BuildAdvancedAtPanel();
-        atPanel.Dock = DockStyle.Top;
         _mainSplit.Panel2.Controls.Add(terminalPanel);
-        _mainSplit.Panel2.Controls.Add(atPanel);
 
         return _mainSplit;
     }
@@ -920,6 +952,7 @@ public sealed class MainForm : Form
         }
 
         _mainSplit.Panel2Collapsed = !show;
+        _atStrip.Visible = show;
         RefreshTexts();
         Invalidate(true);
     }
@@ -989,10 +1022,10 @@ public sealed class MainForm : Form
     private Control BuildDashboardHost()
     {
         var host = new Panel { Dock = DockStyle.Fill, BackColor = WindowGray };
-        _calibrationPage = BuildPage(CalibrationGroups(), "nav.back", ShowBasicPage);
+        _calibrationPage = BuildPage(CalibrationGroups());
         _calibrationPage.Dock = DockStyle.Fill;
         _calibrationPage.Visible = false;
-        _basicPage = BuildPage(BasicGroups(), "nav.calibration", ShowCalibrationPage);
+        _basicPage = BuildPage(BasicGroups());
         _basicPage.Dock = DockStyle.Fill;
         host.Controls.Add(_calibrationPage);
         host.Controls.Add(_basicPage);
@@ -1021,20 +1054,12 @@ public sealed class MainForm : Form
         _basicPage.Visible = true;
     }
 
-    private Panel BuildPage((string TitleKey, Color Tint, (string Key, string NameKey, string Unit)[] Fields)[] groups, string navKey, Action onNav)
+    private Panel BuildPage((string TitleKey, Color Tint, (string Key, string NameKey, string Unit)[] Fields)[] groups)
     {
         var page = new Panel { Dock = DockStyle.Fill };
-        var navRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-        var btnNav = new Button { AutoSize = true };
-        Bind(() => btnNav.Text = Loc.T(navKey));
-        btnNav.Click += (_, _) => onNav();
-        navRow.Controls.Add(btnNav);
-
         var grid = BuildGroupGrid(groups, columns: 1);
         grid.Dock = DockStyle.Fill;
-
         page.Controls.Add(grid);
-        page.Controls.Add(navRow);
         return page;
     }
 
@@ -1083,20 +1108,21 @@ public sealed class MainForm : Form
             Height = 26,
             BackColor = HeaderColor(tint),
             ForeColor = Color.FromArgb(40, 40, 40),
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            Font = AppFonts.DashboardCardHeader,
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(8, 0, 4, 0),
         };
         Bind(() => header.Text = Loc.T(titleKey));
 
         bool hasIndicator = titleKey is "grp.globalStatus" or "grp.sensorLinks";
+        int tileWidth = titleKey == "grp.sensorLinks" ? 230 : 250;
 
         var inner = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, MaximumSize = new Size(540, 3000), Padding = new Padding(4) };
         foreach (var (key, nameKey, unit) in fields)
         {
             bool isUnitKey = unit.StartsWith('@');
             string unitKey = isUnitKey ? unit[1..] : unit;
-            var tile = new InfoTile(Loc.T(nameKey), isUnitKey ? Loc.T(unitKey) : unit, tint);
+            var tile = new InfoTile(Loc.T(nameKey), isUnitKey ? Loc.T(unitKey) : unit, tint, tileWidth);
             if (hasIndicator) tile.EnableIndicator();
             Bind(() => tile.SetName(Loc.T(nameKey)));
             if (isUnitKey) Bind(() => tile.SetUnit(Loc.T(unitKey)));
@@ -1109,37 +1135,42 @@ public sealed class MainForm : Form
         return card;
     }
 
-    private GroupBox BuildAdvancedAtPanel()
+    private ToolStrip BuildAtStrip()
     {
-        var group = new GroupBox { Text = "AT Commands", Height = 150, Padding = new Padding(6) };
-        var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoScroll = true };
+        _atStrip.Dock = DockStyle.Fill;
+        _atStrip.GripStyle = ToolStripGripStyle.Hidden;
+        _atStrip.Renderer = new ButtonFrameRenderer();
+        _atStrip.Visible = false;
 
-        flow.Controls.Add(CommandButton("Enter Command Mode (ATO)", EnterCommandModeManualAsync));
-        flow.Controls.Add(CommandButton("Exit to Data Mode (+++)", ExitToDataModeManualAsync));
+        var lblTitle = new ToolStripLabel { Text = "AT Commands:", Font = AppFonts.AtCommandsRowTitle };
+        _atStrip.Items.Add(lblTitle);
+        _atStrip.Items.Add(new ToolStripSeparator());
+
+        _atStrip.Items.Add(CommandStripButton("Enter Command Mode (ATO)", EnterCommandModeManualAsync));
+        _atStrip.Items.Add(CommandStripButton("Exit to Data Mode (+++)", ExitToDataModeManualAsync));
 
         _btnTestToggle.Text = "Start Test (AT+T)";
-        _btnTestToggle.AutoSize = true;
+        _btnTestToggle.DisplayStyle = ToolStripItemDisplayStyle.Text;
         _btnTestToggle.Click += (_, _) => SendRaw("AT+T");
-        flow.Controls.Add(_btnTestToggle);
+        _atStrip.Items.Add(_btnTestToggle);
 
-        flow.Controls.Add(CommandButton("List Sensors (AT+C?)", () => RunCommandSilent("AT+C?")));
-        flow.Controls.Add(CommandButton("Status (AT+S?)", () => RunCommandSilent("AT+S?")));
-        flow.Controls.Add(CommandButton("Help (AT?)", () => RunCommandSilent("AT?")));
+        _atStrip.Items.Add(CommandStripButton("List Sensors (AT+C?)", () => RunCommandSilent("AT+C?")));
+        _atStrip.Items.Add(CommandStripButton("Status (AT+S?)", () => RunCommandSilent("AT+S?")));
+        _atStrip.Items.Add(CommandStripButton("Help (AT?)", () => RunCommandSilent("AT?")));
 
-        group.Controls.Add(flow);
-        return group;
+        return _atStrip;
     }
 
-    private Button CommandButton(string text, Action onClick)
+    private ToolStripButton CommandStripButton(string text, Action onClick)
     {
-        var btn = new Button { Text = text, AutoSize = true };
+        var btn = new ToolStripButton { Text = text, DisplayStyle = ToolStripItemDisplayStyle.Text };
         btn.Click += (_, _) => onClick();
         return btn;
     }
 
-    private Button CommandButton(string text, Func<Task> onClick)
+    private ToolStripButton CommandStripButton(string text, Func<Task> onClick)
     {
-        var btn = new Button { Text = text, AutoSize = true };
+        var btn = new ToolStripButton { Text = text, DisplayStyle = ToolStripItemDisplayStyle.Text };
         btn.Click += async (_, _) => await onClick();
         return btn;
     }
@@ -1152,7 +1183,7 @@ public sealed class MainForm : Form
         _terminal.ReadOnly = true;
         _terminal.BackColor = Color.FromArgb(18, 18, 18);
         _terminal.ForeColor = Color.Gainsboro;
-        _terminal.Font = new Font("Consolas", 9.5f);
+        _terminal.Font = AppFonts.TerminalLog;
         _terminal.WordWrap = false;
         _terminal.ScrollBars = RichTextBoxScrollBars.Both;
         _terminal.BorderStyle = BorderStyle.FixedSingle;
@@ -1416,12 +1447,4 @@ public sealed class MainForm : Form
         });
     }
 
-    private static Label LabelFor() => new()
-    {
-        AutoSize = true,
-        TextAlign = ContentAlignment.MiddleLeft,
-        Padding = new Padding(0, 6, 2, 0),
-    };
-
-    private static Control Spacer() => new Panel { Width = 14, Height = 1 };
 }

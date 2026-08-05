@@ -4,6 +4,7 @@ public sealed class InfoTile : Panel
 {
     private const int IndicatorDiameter = 12;
     private const int IndicatorLeftMargin = 8;
+    private const int NameLabelVerticalPadding = 6;
 
     private readonly Label _nameLabel;
     private readonly Label _valueLabel;
@@ -11,9 +12,9 @@ public sealed class InfoTile : Panel
     private string _unit;
     private string _lastValue = "--";
 
-    public InfoTile(string name, string unit, Color tint)
+    public InfoTile(string name, string unit, Color tint, int width = 200)
     {
-        Size = new Size(158, 62);
+        Size = new Size(width, 62);
         Margin = new Padding(5);
         BackColor = tint;
         BorderStyle = BorderStyle.FixedSingle;
@@ -23,18 +24,18 @@ public sealed class InfoTile : Panel
         {
             Text = name,
             Dock = DockStyle.Top,
-            Height = 20,
-            Font = new Font("Segoe UI", 8f, FontStyle.Regular),
+            Height = AppFonts.DashboardTileCaption.Height + NameLabelVerticalPadding,
+            Font = AppFonts.DashboardTileCaption,
             ForeColor = Color.FromArgb(70, 70, 70),
             TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(6, 4, 4, 0),
+            Padding = new Padding(6, 3, 4, 3),
             AutoEllipsis = true,
         };
 
         _valueLabel = new Label
         {
             Dock = DockStyle.Fill,
-            Font = new Font("Consolas", 13f, FontStyle.Bold),
+            Font = AppFonts.DashboardTileValue,
             ForeColor = Color.FromArgb(30, 30, 30),
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(6, 0, 4, 6),
@@ -71,7 +72,7 @@ public sealed class InfoTile : Panel
     public void EnableIndicator()
     {
         int textLeft = IndicatorLeftMargin + IndicatorDiameter + 6;
-        _nameLabel.Padding = new Padding(textLeft, 4, 4, 0);
+        _nameLabel.Padding = new Padding(textLeft, 3, 4, 3);
         _valueLabel.Padding = new Padding(textLeft, 0, 4, 6);
 
         _dot = new StatusDot(BackColor)

@@ -21,21 +21,23 @@ public static class Loc
         ["conn.refresh"] = ("Yenile", "Refresh"),
         ["conn.baud"] = ("Baud:", "Baud:"),
         ["conn.parity"] = ("Parite:", "Parity:"),
-        ["conn.databits"] = ("Veri Biti:", "Data bits:"),
-        ["conn.stopbits"] = ("Dur Biti:", "Stop bits:"),
+        ["conn.databits"] = ("Data Biti:", "Data bits:"),
+        ["conn.stopbits"] = ("Stop Biti:", "Stop bits:"),
         ["conn.connect"] = ("Bağlan", "Connect"),
         ["conn.disconnect"] = ("Bağlantıyı Kes", "Disconnect"),
         ["conn.statusHelp"] = (
-            "Bağlantı durumu ışığı:\n" +
-            "• Kırmızı — Bağlı değil.\n" +
-            "• Yeşil — Bağlı, cihaz normal yanıt veriyor.\n" +
-            "• Turuncu — Bağlı, ancak cihazdan sinyal alınamıyor (güç kaybı olabilir).\n" +
-            "   Uygulama otomatik olarak yeniden bağlanmayı deniyor.",
-            "Connection status light:\n" +
+            "Bağlantı durumu:\n" +
+            "• Kırmızı -> Bağlı değil.\n" +
+            "• Yeşil -> Bağlı, cihaz normal yanıt veriyor.\n" +
+            "• Turuncu -> Bağlı, ancak cihazdan yanıt gelmiyor. (baud yanlış veya güç yok).\n" +
+            "   Uygulama otomatik olarak yeniden bağlanmayı deniyor.\n"+
+            "<Blazecaller-2026> 52",
+            "Connection status:\n" +
             "• Red — Disconnected.\n" +
             "• Green — Connected, device responding normally.\n" +
-            "• Orange — Connected, but no signal from the device (possible power loss).\n" +
-            "   The app is automatically retrying the handshake."),
+            "• Orange — Connected, but no signal from the device (wrong baud rate or power loss).\n" +
+            "   The app is automatically retrying the handshake.\n"+
+            "<Blazecaller-2026> 52"),
 
         ["parity.none"] = ("Yok", "None"),
         ["parity.odd"] = ("Tek", "Odd"),
@@ -44,18 +46,18 @@ public static class Loc
         ["parity.space"] = ("Boşluk", "Space"),
 
         ["basic.title"] = ("Komutlar", "Commands"),
-        ["basic.sensor"] = ("Sensör:", "Sensor:"),
+        ["basic.sensor"] = ("Sensor:", "Sensor:"),
         ["basic.apply"] = ("Uygula", "Apply"),
         ["basic.on"] = ("AÇIK", "ON"),
         ["basic.off"] = ("KAPALI", "OFF"),
         ["basic.serialLabel"] = ("Seri No:", "Serial No:"),
         ["basic.setSerial"] = ("Seri No Ayarla", "Set Serial Number"),
-        ["basic.setBaud"] = ("Baud Hızı Ayarla", "Set Baud Rate"),
-        ["basic.showSensorList"] = ("Sensör Listesi", "Show Sensor List"),
+        ["basic.setBaud"] = ("Baud Kaydet", "Save Baud Rate"),
+        ["basic.showSensorList"] = ("Sensor Listesi", "Show Sensor List"),
         ["basic.systemStatus"] = ("Sistem Durumu", "System Status"),
         ["basic.help"] = ("Yardım", "Help"),
-        ["basic.advancedShow"] = ("Gelişmiş ▶", "Advanced ▶"),
-        ["basic.advancedHide"] = ("Gelişmiş ◀", "Advanced ◀"),
+        ["basic.advancedShow"] = ("Terminal ▶", "Terminal ▶"),
+        ["basic.advancedHide"] = ("Terminal ◀", "Terminal ◀"),
 
         ["sensor.digitalTemp"] = ("Dijital Sıcaklık", "Digital Temp"),
         ["sensor.solar"] = ("Güneş", "Solar"),
@@ -63,8 +65,8 @@ public static class Loc
         ["sensor.rain"] = ("Yağmur", "Rain"),
         ["sensor.bgtWind"] = ("BGT Rüzgar", "BGT Wind"),
 
-        ["nav.calibration"] = ("Kalibrasyon Ayarları →", "Calibration Settings →"),
-        ["nav.back"] = ("← Geri", "← Back"),
+        ["nav.calibration"] = ("Kalibrasyon Modu →", "Calibration Mode →"),
+        ["nav.back"] = ("← Normal Mod", "← Standard Mode"),
 
         ["grp.tempHumidity"] = ("Sıcaklık ve Nem", "Temperature & Humidity"),
         ["grp.windVibration"] = ("Rüzgar ve Titreşim", "Wind & Vibration"),
@@ -73,7 +75,7 @@ public static class Loc
         ["grp.roomTempPwm"] = ("Oda Sıcaklığı PWM ve Ayar Noktası", "Wind Room-Temp PWM & Setpoint"),
         ["grp.thresholds"] = ("Eşikler ve Zamanlama", "Thresholds & Timing"),
         ["grp.globalStatus"] = ("Ortam Durumu", "Ambient Status"),
-        ["grp.sensorLinks"] = ("Sensör İletişimi", "Sensor Communication"),
+        ["grp.sensorLinks"] = ("Haberleşme Durumu", "Communication Status"),
 
         ["tile.digitalTemp"] = ("Dijital Sıcaklık", "Digital Temp"),
         ["tile.sht20Temp"] = ("SHT20 Sıcaklık", "SHT20 Temp"),
@@ -88,8 +90,8 @@ public static class Loc
         ["tile.zeroSpeedPwm3"] = ("PWM3", "PWM3"),
         ["tile.roomTempPwm1"] = ("Oda Sıcaklığı PWM 1", "Room-Temp PWM 1"),
         ["tile.roomTempPwm3"] = ("Oda Sıcaklığı PWM 3", "Room-Temp PWM 3"),
-        ["tile.windSpeedSetpoint"] = ("Rüzgar Hızı Ayar Noktası", "Wind Speed Setpoint"),
-        ["tile.accelThreshold"] = ("İvme Eşiği", "Accel Threshold"),
+        ["tile.windSpeedSetpoint"] = ("Rüzgar Hızı Set Değeri", "Wind Speed Setpoint"),
+        ["tile.accelThreshold"] = ("Titreşim Eşiği", "Tilt Threshold"),
         ["tile.sleepInterval"] = ("Uyku Aralığı", "Sleep Interval"),
 
         ["tile.statusTemp"] = ("Sıcaklık", "Temperature"),
@@ -100,17 +102,17 @@ public static class Loc
 
         ["tile.linkAmbientTemp"] = ("Ortam Sıcaklığı (SPI)", "Ambient Temp (SPI)"),
         ["tile.linkHeaterTemp"] = ("Isıtıcı Sıcaklığı (SPI)", "Heater Temp (SPI)"),
-        ["tile.linkAccel"] = ("İvmeölçer (I2C)", "Accelerometer (I2C)"),
+        ["tile.linkAccel"] = ("Titreşim (I2C)", "Tilt (I2C)"),
         ["tile.linkSht20"] = ("SHT20 (I2C)", "SHT20 (I2C)"),
         ["tile.linkDigitalTemp"] = ("Dijital Sıcaklık (ID5)", "Digital Temp (ID5)"),
         ["tile.linkSolar"] = ("Güneş (ID6)", "Solar (ID6)"),
         ["tile.linkSoil"] = ("Toprak (ID7)", "Soil (ID7)"),
         ["tile.linkRain"] = ("Yağmur (ID8)", "Rain (ID8)"),
-        ["tile.linkWind"] = ("BGT Rüzgar (ID9)", "BGT Wind (ID9)"),
+        ["tile.linkWind"] = ("Anemometre (ID9)", "Anemometer (ID9)"),
 
         ["status.high"] = ("Yüksek", "HIGH"),
         ["status.low"] = ("Düşük", "LOW"),
-        ["status.linkOk"] = ("Bağlı", "OK"),
+        ["status.linkOk"] = ("Var", "OK"),
 
         ["unit.min"] = ("dk", "min"),
 
@@ -126,10 +128,10 @@ public static class Loc
         ["status.off"] = ("Kapalı", "Off"),
         ["status.frames"] = ("Veri Sayısı", "Frames"),
 
-        ["popup.sensorList"] = ("Sensör Listesi", "Sensor List"),
+        ["popup.sensorList"] = ("Sensor Listesi", "Sensor List"),
         ["popup.status"] = ("Sistem Durumu", "System Status"),
         ["popup.help"] = ("Yardım", "Help"),
-        ["popup.sensorControl"] = ("Sensör Kontrolü", "Sensor Control"),
+        ["popup.sensorControl"] = ("Sensor Kontrolü", "Sensor Control"),
         ["popup.serialNo"] = ("Seri No", "Serial No"),
         ["popup.baudRate"] = ("Baud Hızı", "Baud Rate"),
         ["msg.commError"] = ("Cihazdan geçerli bir yanıt alınamadı.", "Could not get a valid response from the device."),
