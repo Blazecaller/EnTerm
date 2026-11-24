@@ -21,6 +21,8 @@ public sealed class AtLinkParser
     public event Action<TestFrame>? TestFrameReceived;
     public event Action<LinkMode>? ModeChanged;
     public event Action<bool>? TestModeChanged;
+    public event Action<CalibrationFrame>? CalibrationFrameReceived;
+    public event Action<bool>? CalibrationModeChanged;
 
     public void Feed(byte[] data, int count)
     {
@@ -49,6 +51,8 @@ public sealed class AtLinkParser
             Consider("+DATA MODE\r\n", () => ModeChanged?.Invoke(LinkMode.Data));
             Consider("BEGIN TEST\r\n", () => TestModeChanged?.Invoke(true));
             Consider("END TEST\r\n", () => TestModeChanged?.Invoke(false));
+            Consider("CALIB PACK ON\r\n", () => CalibrationModeChanged?.Invoke(true));
+            Consider("CALIB PACK OFF\r\n", () => CalibrationModeChanged?.Invoke(false));
 
             var frameMatch = TestFrameRegex.Match(current);
             if (frameMatch.Success && frameMatch.Index < bestIndex)
@@ -58,7 +62,14 @@ public sealed class AtLinkParser
                 string body = frameMatch.Groups["body"].Value;
                 action = () =>
                 {
-                    if (TestFrame.TryParse(body, out var frame) && frame is not null)
+                    if (CalibrationFrame.IsCalibrationBody(body))
+                    {
+                        if (CalibrationFrame.TryParse(body, out var calibration) && calibration is not null)
+                        {
+                            CalibrationFrameReceived?.Invoke(calibration);
+                        }
+                    }
+                    else if (TestFrame.TryParse(body, out var frame) && frame is not null)
                     {
                         TestFrameReceived?.Invoke(frame);
                     }

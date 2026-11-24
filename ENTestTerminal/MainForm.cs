@@ -16,7 +16,23 @@ public sealed class MainForm : Form
         (9, "sensor.bgtWind"),
     };
 
-    private static readonly string[] SensorActionCommands = { "ON", "OFF" };
+
+    private static readonly Dictionary<string, CalibrationSetter> CalibrationSetters = new()
+    {
+        ["WindZeroSpeedPwm1"] = new("AT+CALP1", CalibInput.Integer, v => v is >= 0 and <= 1000, "0 – 1000"),
+        ["WindZeroSpeedPwm2"] = new("AT+CALP2", CalibInput.Integer, v => v is >= 0 and <= 1000, "0 – 1000"),
+        ["WindZeroSpeedPwm3"] = new("AT+CALP3", CalibInput.Integer, v => v is >= 0 and <= 1000, "0 – 1000"),
+        ["CalibSpeed1"] = new("AT+CALS1", CalibInput.Float, v => v >= 0, "≥ 0"),
+        ["CalibSpeed2"] = new("AT+CALS2", CalibInput.Float, v => v >= 0, "≥ 0"),
+        ["CalibSpeed3"] = new("AT+CALS3", CalibInput.Float, v => v >= 0, "≥ 0"),
+        ["WindRoomTempPwm1"] = new("AT+CALR1", CalibInput.Integer, v => v is >= 0 and <= 999, "0 – 999"),
+        ["WindRoomTempPwm2"] = new("AT+CALR2", CalibInput.Integer, v => v is >= 0 and <= 999, "0 – 999"),
+        ["NoWindPwm"] = new("AT+NOW", CalibInput.None, _ => true, string.Empty),
+        ["HeaterSetpoint"] = new("AT+HSP", CalibInput.Float, v => v is > 0 and < 100, "0 < x < 100"),
+        ["PidKp"] = new("AT+KP", CalibInput.Float, v => v >= 0, "≥ 0", Temporary: true),
+        ["PidKi"] = new("AT+KI", CalibInput.Float, v => v >= 0, "≥ 0", Temporary: true),
+        ["PidKd"] = new("AT+KD", CalibInput.Float, v => v >= 0, "≥ 0", Temporary: true),
+    };
 
     private static readonly Parity[] ParityValues = { Parity.None, Parity.Odd, Parity.Even, Parity.Mark, Parity.Space };
     private static readonly string[] ParityKeys = { "parity.none", "parity.odd", "parity.even", "parity.mark", "parity.space" };
@@ -35,6 +51,8 @@ public sealed class MainForm : Form
     private int _frameCount;
     private LinkMode _lastMode = LinkMode.Unknown;
     private bool _lastTestActive;
+    private bool _lastCalibActive;
+    private bool _calibUnsupported;
     private string? _lastPortName;
     private int _lastBaud;
     private bool _advancedVisible;
@@ -48,27 +66,29 @@ public sealed class MainForm : Form
     private readonly Dictionary<string, InfoTile> _tiles = new();
     private readonly List<Action> _retext = new();
 
-    private readonly ToolStripComboBox _cmbPort = new();
-    private readonly ToolStripComboBox _cmbBaud = new();
-    private readonly ToolStripComboBox _cmbParity = new();
-    private readonly ToolStripComboBox _cmbDataBits = new();
-    private readonly ToolStripComboBox _cmbStopBits = new();
-    private readonly ToolStripButton _btnConnect = new();
+    private readonly ComboBox _cmbPort = new();
+    private readonly ComboBox _cmbBaud = new();
+    private readonly ComboBox _cmbParity = new();
+    private readonly ComboBox _cmbDataBits = new();
+    private readonly ComboBox _cmbStopBits = new();
+    private readonly Button _btnConnect = new();
     private readonly Label _lblConnDot = new();
     private readonly Label _lblConnHelp = new();
     private readonly ToolTip _connToolTip = new();
     private readonly Label _lblSerialNo = new();
     private string? _lastSerialNo;
 
-    private readonly ToolStripComboBox _cmbSensorId = new();
-    private readonly ToolStripComboBox _cmbSensorAction = new();
-    private readonly ToolStripComboBox _cmbBaudSet = new();
-    private readonly ToolStripTextBox _txtSerialSet = new();
 
     private readonly ToolStripButton _btnTestToggle = new();
 
     private Panel _basicPage = null!;
     private Panel _calibrationPage = null!;
+    private readonly Label _lblCalibBanner = new();
+    private readonly Button _btnSetZeroWind = new();
+    private readonly Button _btnCalibAdvanced = new();
+    private bool _calibAdvancedVisible;
+    private readonly Dictionary<string, Control> _cards = new();
+    private static readonly string[] AdvancedCalibrationGroups = { "grp.heater", "grp.pid" };
 
     private readonly SplitContainer _mainSplit = new();
     private bool _splitterInitialized;
@@ -81,6 +101,8 @@ public sealed class MainForm : Form
 
     private readonly System.Windows.Forms.Timer _captureTimer = new() { Interval = 500 };
     private StringBuilder? _captureBuffer;
+    private DateTime _captureDeadlineUtc;
+    private const int CaptureMaxExtraMs = 2500;
     private TaskCompletionSource<string?>? _captureCompletion;
     private bool _queryInProgress;
     private readonly Random _jitter = new();
@@ -88,6 +110,7 @@ public sealed class MainForm : Form
     private readonly ToolStripStatusLabel _statusConn = new();
     private readonly ToolStripStatusLabel _statusMode = new();
     private readonly ToolStripStatusLabel _statusTest = new();
+    private readonly ToolStripStatusLabel _statusCalib = new();
     private readonly ToolStripStatusLabel _statusFrames = new();
 
     private readonly MenuStrip _menuStrip = new();
@@ -111,6 +134,8 @@ public sealed class MainForm : Form
         _parser.TestFrameReceived += OnTestFrame;
         _parser.ModeChanged += OnModeChanged;
         _parser.TestModeChanged += OnTestModeChanged;
+        _parser.CalibrationFrameReceived += OnCalibrationFrame;
+        _parser.CalibrationModeChanged += OnCalibrationModeChanged;
         _captureTimer.Tick += OnCaptureTimerTick;
         _linkWatchdog.Tick += OnLinkWatchdogTick;
 
@@ -118,27 +143,24 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 4,
             BackColor = WindowGray,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var languageBar = BuildLanguageBar();
         var mainContent = BuildMainContent();
-        var connStrip = BuildConnectionStrip();
-        var commandsStrip = BuildCommandsStrip();
+        var languageBar = BuildLanguageBar();
+        var connectionStrip = BuildConnectionStrip();
         var atStrip = BuildAtStrip();
 
         root.Controls.Add(languageBar, 0, 0);
-        root.Controls.Add(connStrip, 0, 1);
-        root.Controls.Add(commandsStrip, 0, 2);
-        root.Controls.Add(atStrip, 0, 3);
-        root.Controls.Add(mainContent, 0, 4);
+        root.Controls.Add(connectionStrip, 0, 1);
+        root.Controls.Add(atStrip, 0, 2);
+        root.Controls.Add(mainContent, 0, 3);
 
         var status = new StatusStrip();
         status.Items.Add(_statusConn);
@@ -146,6 +168,8 @@ public sealed class MainForm : Form
         status.Items.Add(_statusMode);
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_statusTest);
+        status.Items.Add(new ToolStripSeparator());
+        status.Items.Add(_statusCalib);
         status.Items.Add(new ToolStripSeparator());
         status.Items.Add(_statusFrames);
         Bind(() => _statusConn.Text = _port is not { IsOpen: true }
@@ -155,6 +179,7 @@ public sealed class MainForm : Form
                 : $"{Loc.T("status.connected")}: {_lastPortName} @ {_lastBaud}");
         Bind(() => _statusMode.Text = $"{Loc.T("status.mode")}: {ModeText(_lastMode)}");
         Bind(() => _statusTest.Text = $"{Loc.T("status.test")}: {(_lastTestActive ? Loc.T("status.on") : Loc.T("status.off"))}");
+        Bind(() => _statusCalib.Text = $"{Loc.T("status.calib")}: {(_lastCalibActive ? Loc.T("status.on") : Loc.T("status.off"))}");
         Bind(() => _statusFrames.Text = $"{Loc.T("status.frames")}: {_frameCount}");
 
         _menuStrip.Font = AppFonts.MenuStrip;
@@ -168,6 +193,7 @@ public sealed class MainForm : Form
             RefreshTexts();
         };
         _menuStrip.Items.Add(_btnLanguage);
+        AddMenuBarButtons();
 
         MainMenuStrip = _menuStrip;
 
@@ -207,39 +233,142 @@ public sealed class MainForm : Form
 
     private Control BuildLanguageBar()
     {
-        var panel = new Panel { Dock = DockStyle.Fill, BackColor = WindowGray };
+        // Equal side columns keep the mode button centred; the serial number sits to its right.
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = WindowGray, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var modeStrip = new ToolStrip
+        {
+            Dock = DockStyle.None,
+            Anchor = AnchorStyles.None,
+            AutoSize = true,
+            GripStyle = ToolStripGripStyle.Hidden,
+            Font = AppFonts.ToolbarRowTitle,
+            Renderer = new ButtonFrameRenderer(),
+            BackColor = WindowGray,
+            CanOverflow = false,
+        };
+        var btnCalibToggle = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
+        Bind(() => btnCalibToggle.Text = _calibrationPage.Visible ? Loc.T("nav.back") : Loc.T("nav.calibration"));
+        btnCalibToggle.Click += async (_, _) =>
+        {
+            if (_calibrationPage.Visible) await ExitCalibrationAsync(); else await EnterCalibrationAsync();
+        };
+        modeStrip.Items.Add(btnCalibToggle);
+        panel.Controls.Add(modeStrip, 1, 0);
 
         _lblSerialNo.Dock = DockStyle.Fill;
-        _lblSerialNo.TextAlign = ContentAlignment.MiddleCenter;
-        _lblSerialNo.Font = AppFonts.SerialNumberBanner;
+        _lblSerialNo.TextAlign = ContentAlignment.MiddleLeft;
+        _lblSerialNo.Padding = new Padding(12, 0, 0, 0);
+        _lblSerialNo.Font = AppFonts.ToolbarRowTitle;
         Bind(() => _lblSerialNo.Text = _lastSerialNo is { } sn ? $"{Loc.T("popup.serialNo")}: {sn}" : string.Empty);
-        panel.Controls.Add(_lblSerialNo);
+        panel.Controls.Add(_lblSerialNo, 2, 0);
 
         return panel;
     }
 
-    private ToolStrip BuildConnectionStrip()
+    private static Button StripButton()
     {
-        var strip = new ToolStrip
+        var button = new Button
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Font = AppFonts.ConnectionStripText,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = ButtonFrameRenderer.FillNormal,
+            Margin = new Padding(3, 2, 3, 2),
+            Padding = new Padding(4, 0, 4, 0),
+            Cursor = Cursors.Hand,
+        };
+        button.FlatAppearance.BorderColor = ButtonFrameRenderer.BorderColor;
+        button.FlatAppearance.MouseOverBackColor = ButtonFrameRenderer.FillHover;
+        button.FlatAppearance.MouseDownBackColor = ButtonFrameRenderer.FillPressed;
+        return button;
+    }
+
+    private static void StyleCombo(ComboBox combo, int width, ComboBoxStyle style = ComboBoxStyle.DropDownList)
+    {
+        combo.DropDownStyle = style;
+        combo.Font = AppFonts.ConnectionStripText;
+        combo.Width = width;
+        combo.Margin = new Padding(3, 3, 3, 3);
+    }
+
+    private Control BuildConnectionStrip()
+    {
+        var strip = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            GripStyle = ToolStripGripStyle.Hidden,
-            Font = AppFonts.ToolbarRowText,
-            Renderer = new ButtonFrameRenderer(),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            BackColor = HeaderColor(Color.FromArgb(214, 234, 248)),
+            Padding = new Padding(6, 0, 6, 0),
+            Margin = Padding.Empty,
         };
 
-        _btnConnect.Font = AppFonts.ToolbarRowTitle;
-        _btnConnect.DisplayStyle = ToolStripItemDisplayStyle.Text;
+        Label StripLabel(string key, bool title = false)
+        {
+            var label = new Label
+            {
+                AutoSize = true,
+                Font = title ? AppFonts.ConnectionStripTitle : AppFonts.ConnectionStripText,
+                Margin = new Padding(title ? 2 : 10, 0, 2, 0),
+            };
+            Bind(() => label.Text = Loc.T(key));
+            return label;
+        }
+
+        StyleCombo(_cmbPort, 100);
+        var btnRefresh = StripButton();
+        Bind(() => btnRefresh.Text = Loc.T("conn.refresh"));
+        btnRefresh.Click += (_, _) => RefreshPorts();
+
+        StyleCombo(_cmbBaud, 100, ComboBoxStyle.DropDown);
+        _cmbBaud.Items.AddRange(new object[] { 9600, 19200, 38400, 57600, 115200 });
+        _cmbBaud.SelectedItem = 19200;
+
+        StyleCombo(_cmbParity, 100);
+        Bind(() =>
+        {
+            int sel = Math.Max(_cmbParity.SelectedIndex, 0);
+            _cmbParity.Items.Clear();
+            foreach (var k in ParityKeys) _cmbParity.Items.Add(Loc.T(k));
+            _cmbParity.SelectedIndex = sel;
+        });
+
+        StyleCombo(_cmbDataBits, 55);
+        _cmbDataBits.Items.AddRange(new object[] { 7, 8 });
+        _cmbDataBits.SelectedItem = 8;
+
+        StyleCombo(_cmbStopBits, 65);
+        _cmbStopBits.Items.AddRange(StopBitsLabels);
+        _cmbStopBits.SelectedIndex = 0;
+
+        _btnConnect.AutoSize = true;
+        _btnConnect.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _btnConnect.Font = AppFonts.ConnectionStripTitle;
+        _btnConnect.FlatStyle = FlatStyle.Flat;
+        _btnConnect.BackColor = ButtonFrameRenderer.FillNormal;
+        _btnConnect.FlatAppearance.BorderColor = ButtonFrameRenderer.BorderColor;
+        _btnConnect.FlatAppearance.MouseOverBackColor = ButtonFrameRenderer.FillHover;
+        _btnConnect.FlatAppearance.MouseDownBackColor = ButtonFrameRenderer.FillPressed;
+        _btnConnect.Padding = new Padding(10, 2, 10, 2);
+        _btnConnect.Margin = new Padding(14, 3, 3, 3);
+        _btnConnect.Cursor = Cursors.Hand;
         Bind(() => _btnConnect.Text = (_port is { IsOpen: true }) ? Loc.T("conn.disconnect") : Loc.T("conn.connect"));
         _btnConnect.Click += (_, _) => ToggleConnection();
-        strip.Items.Add(_btnConnect);
 
         _lblConnDot.Text = string.Empty;
         Bind(() => _lblConnDot.ForeColor = _port is not { IsOpen: true }
             ? Color.Firebrick
             : _linkStale ? Color.DarkOrange : Color.ForestGreen);
         _lblConnDot.AutoSize = false;
-        _lblConnDot.Size = new Size(26, 26);
+        _lblConnDot.Size = new Size(42, 42);
+        _lblConnDot.Margin = new Padding(4, 0, 0, 0);
         _lblConnDot.Paint += (_, e) =>
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -249,13 +378,13 @@ public sealed class MainForm : Form
             e.Graphics.FillEllipse(brush, rect);
         };
         _lblConnDot.ForeColorChanged += (_, _) => _lblConnDot.Invalidate();
-        strip.Items.Add(new ToolStripControlHost(_lblConnDot) { AutoSize = false, Size = _lblConnDot.Size, Margin = new Padding(6, 2, 0, 0) });
 
         _lblConnHelp.Text = "?";
         _lblConnHelp.Font = AppFonts.ConnectionHelpIcon;
         _lblConnHelp.ForeColor = Color.DimGray;
         _lblConnHelp.AutoSize = false;
         _lblConnHelp.Size = new Size(26, 26);
+        _lblConnHelp.Margin = new Padding(2, 0, 0, 0);
         _lblConnHelp.TextAlign = ContentAlignment.MiddleCenter;
         _lblConnHelp.Cursor = Cursors.Help;
         _lblConnHelp.Paint += (_, e) =>
@@ -283,66 +412,19 @@ public sealed class MainForm : Form
             TextRenderer.DrawText(e.Graphics, e.ToolTipText, AppFonts.ConnectionHelpTooltip, textBounds, SystemColors.InfoText, TextFormatFlags.Left | TextFormatFlags.Top);
         };
         Bind(() => _connToolTip.SetToolTip(_lblConnHelp, Loc.T("conn.statusHelp")));
-        strip.Items.Add(new ToolStripControlHost(_lblConnHelp) { AutoSize = false, Size = _lblConnHelp.Size, Margin = new Padding(4, 4, 0, 0) });
 
-        strip.Items.Add(new ToolStripSeparator());
-
-        var lblPort = new ToolStripLabel(); Bind(() => lblPort.Text = Loc.T("conn.port"));
-        strip.Items.Add(lblPort);
-        _cmbPort.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbPort.Font = AppFonts.ToolbarRowDropdown;
-        strip.Items.Add(_cmbPort);
-
-        var btnRefresh = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
-        Bind(() => btnRefresh.Text = Loc.T("conn.refresh"));
-        btnRefresh.Click += (_, _) => RefreshPorts();
-        strip.Items.Add(btnRefresh);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var lblBaud = new ToolStripLabel(); Bind(() => lblBaud.Text = Loc.T("conn.baud"));
-        strip.Items.Add(lblBaud);
-        _cmbBaud.DropDownStyle = ComboBoxStyle.DropDown;
-        _cmbBaud.Font = AppFonts.ToolbarRowDropdown;
-        _cmbBaud.Items.AddRange(new object[] { 9600, 19200, 38400, 57600, 115200 });
-        _cmbBaud.SelectedItem = 9600;
-        AutoSizeCombo(_cmbBaud);
-        strip.Items.Add(_cmbBaud);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var lblParity = new ToolStripLabel(); Bind(() => lblParity.Text = Loc.T("conn.parity"));
-        strip.Items.Add(lblParity);
-        _cmbParity.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbParity.Font = AppFonts.ToolbarRowDropdown;
-        Bind(() =>
+        strip.Controls.AddRange(new Control[]
         {
-            int sel = Math.Max(_cmbParity.SelectedIndex, 0);
-            _cmbParity.Items.Clear();
-            foreach (var k in ParityKeys) _cmbParity.Items.Add(Loc.T(k));
-            _cmbParity.SelectedIndex = sel;
-            AutoSizeCombo(_cmbParity);
+            StripLabel("conn.title", title: true),
+            StripLabel("conn.port"), _cmbPort, btnRefresh,
+            StripLabel("conn.baud"), _cmbBaud,
+            StripLabel("conn.parity"), _cmbParity,
+            StripLabel("conn.databits"), _cmbDataBits,
+            StripLabel("conn.stopbits"), _cmbStopBits,
+            _btnConnect, _lblConnDot, _lblConnHelp,
         });
-        strip.Items.Add(_cmbParity);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var lblDataBits = new ToolStripLabel(); Bind(() => lblDataBits.Text = Loc.T("conn.databits"));
-        strip.Items.Add(lblDataBits);
-        _cmbDataBits.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbDataBits.Font = AppFonts.ToolbarRowDropdown;
-        _cmbDataBits.Items.AddRange(new object[] { 7, 8 });
-        _cmbDataBits.SelectedItem = 8;
-        AutoSizeCombo(_cmbDataBits);
-        strip.Items.Add(_cmbDataBits);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var lblStopBits = new ToolStripLabel(); Bind(() => lblStopBits.Text = Loc.T("conn.stopbits"));
-        strip.Items.Add(lblStopBits);
-        _cmbStopBits.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbStopBits.Font = AppFonts.ToolbarRowDropdown;
-        _cmbStopBits.Items.AddRange(StopBitsLabels);
-        _cmbStopBits.SelectedIndex = 0;
-        AutoSizeCombo(_cmbStopBits);
-        strip.Items.Add(_cmbStopBits);
-
+        // Anchor without Top/Bottom centres each control vertically in the row.
+        foreach (Control c in strip.Controls) c.Anchor = AnchorStyles.Left;
         return strip;
     }
 
@@ -359,18 +441,6 @@ public sealed class MainForm : Form
         {
             _cmbPort.SelectedIndex = 0;
         }
-        AutoSizeCombo(_cmbPort);
-    }
-
-    private static void AutoSizeCombo(ToolStripComboBox combo, int minWidth = 120)
-    {
-        int widest = 0;
-        foreach (var item in combo.Items)
-        {
-            int w = TextRenderer.MeasureText(item?.ToString() ?? string.Empty, combo.Font).Width;
-            if (w > widest) widest = w;
-        }
-        combo.Width = Math.Max(widest + 40, minWidth);
     }
 
     private async void ToggleConnection()
@@ -383,13 +453,13 @@ public sealed class MainForm : Form
 
         if (_cmbPort.SelectedItem is not string portName)
         {
-            MessageBox.Show(this, Loc.T("msg.noPort"), Loc.T("msg.noPortTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            CenteredMessage.Show(this, Loc.T("msg.noPort"), Loc.T("msg.noPortTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         if (!int.TryParse(_cmbBaud.Text, out int baud) || baud <= 0)
         {
-            MessageBox.Show(this, Loc.T("msg.invalidBaud"), Loc.T("msg.invalidBaudTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            CenteredMessage.Show(this, Loc.T("msg.invalidBaud"), Loc.T("msg.invalidBaudTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -409,7 +479,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"{portName}:\n{ex.Message}", Loc.T("msg.connFailedTitle"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+            CenteredMessage.Show(this, $"{portName}:\n{ex.Message}", Loc.T("msg.connFailedTitle"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             _port = null;
             return;
         }
@@ -447,39 +517,26 @@ public sealed class MainForm : Form
         _queryInProgress = true;
         try
         {
-            var modeReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnMode(LinkMode m)
+            if (!await TryEnterCommandModeAsync())
             {
-                if (m == LinkMode.Command) modeReached.TrySetResult(true);
-            }
-
-            _parser.ModeChanged += OnMode;
-            try
-            {
-                for (int attempt = 0; attempt < 3 && !modeReached.Task.IsCompleted; attempt++)
-                {
-                    SendRaw("ATO");
-                    await Task.Delay(250);
-                    SendRaw("ATO");
-                    await Task.WhenAny(modeReached.Task, Task.Delay(600));
-                }
-
-                if (!modeReached.Task.IsCompleted)
-                {
-                    AppendTerminal("--- " + Loc.T("msg.handshakeFailed") + " ---\r\n", Color.Orange);
-                    return;
-                }
-            }
-            finally
-            {
-                _parser.ModeChanged -= OnMode;
+                AppendTerminal("--- " + Loc.T("msg.handshakeFailed") + " ---\r\n", Color.Orange);
+                return;
             }
 
             await QuerySerialNumberSilentlyAsync();
 
+            // After a power loss the device comes back with no stream, so restart the one the open page needs.
+            if (_calibrationPage.Visible && !_calibUnsupported)
+            {
+                if (await CaptureParsedAsync("AT+CALIB=1", ParseCalibOnReply, attempts: 2) is { Accepted: true }) return;
+                AppendTerminal("--- " + Loc.T("msg.calibEnterFailed") + " ---\r\n", Color.Orange);
+            }
+
             var frameSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             void OnFrame(TestFrame _) => frameSeen.TrySetResult(true);
+            void OnCalibFrame(CalibrationFrame _) => frameSeen.TrySetResult(true);
             _parser.TestFrameReceived += OnFrame;
+            _parser.CalibrationFrameReceived += OnCalibFrame;
             try
             {
                 await Task.WhenAny(frameSeen.Task, Task.Delay(1200));
@@ -491,11 +548,38 @@ public sealed class MainForm : Form
             finally
             {
                 _parser.TestFrameReceived -= OnFrame;
+                _parser.CalibrationFrameReceived -= OnCalibFrame;
             }
         }
         finally
         {
             _queryInProgress = false;
+        }
+    }
+
+    private async Task<bool> TryEnterCommandModeAsync()
+    {
+        var modeReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnMode(LinkMode m)
+        {
+            if (m == LinkMode.Command) modeReached.TrySetResult(true);
+        }
+
+        _parser.ModeChanged += OnMode;
+        try
+        {
+            for (int attempt = 0; attempt < 3 && !modeReached.Task.IsCompleted; attempt++)
+            {
+                SendRaw("ATO");
+                await Task.Delay(250);
+                SendRaw("ATO");
+                await Task.WhenAny(modeReached.Task, Task.Delay(600));
+            }
+            return modeReached.Task.IsCompleted;
+        }
+        finally
+        {
+            _parser.ModeChanged -= OnMode;
         }
     }
 
@@ -539,10 +623,13 @@ public sealed class MainForm : Form
 
         _lastMode = LinkMode.Unknown;
         _lastTestActive = false;
+        _lastCalibActive = false;
+        _calibUnsupported = false;
         _lastSerialNo = null;
         _linkWatchdog.Stop();
         _linkStale = false;
         _recovering = false;
+        if (_calibrationPage.Visible) ShowBasicPage();
         SetConnectionControlsEnabled(true);
         RefreshTexts();
         AppendTerminal("--- disconnected ---\r\n", Color.Gray);
@@ -556,12 +643,13 @@ public sealed class MainForm : Form
             return;
         }
         if (_port is not { IsOpen: true }) return;
-        if (_queryInProgress || _linkStale || !_lastTestActive) return;
+        if (_queryInProgress || _linkStale || !(_lastTestActive || _lastCalibActive)) return;
         if ((DateTime.UtcNow - _lastFrameUtc).TotalMilliseconds < LinkSilenceMs) return;
 
         _linkStale = true;
         _lastMode = LinkMode.Unknown;
         _lastTestActive = false;
+        _lastCalibActive = false;
         AppendTerminal("--- no signal from device (possible power loss) ---\r\n", Color.Orange);
         RefreshTexts();
         _ = RecoveryLoopAsync();
@@ -602,119 +690,43 @@ public sealed class MainForm : Form
         _cmbStopBits.Enabled = enabled;
     }
 
-    private ToolStrip BuildCommandsStrip()
+    private void RunCommandDialog(CommandDialog dialog, string titleKey)
     {
-        var strip = new ToolStrip
+        using (dialog)
         {
-            Dock = DockStyle.Fill,
-            GripStyle = ToolStripGripStyle.Hidden,
-            Font = AppFonts.ToolbarRowText,
-            Renderer = new ButtonFrameRenderer(),
-        };
+            if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Command is null) return;
+            RunQuery(dialog.Command, titleKey, PassthroughResponse);
+        }
+    }
 
-        var lblSensor = new ToolStripLabel(); Bind(() => lblSensor.Text = Loc.T("basic.sensor"));
-        strip.Items.Add(lblSensor);
-        _cmbSensorId.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbSensorId.Font = AppFonts.ToolbarRowDropdown;
-        _cmbSensorId.AutoSize = false;
-        _cmbSensorId.Width = 280;
-        Bind(() =>
+    private void OpenDeviceSettings()
+    {
+        using var dialog = new DeviceSettingsDialog();
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Command is null) return;
+        RunQuery(dialog.Command, dialog.IsSerialChange ? "basic.setSerial" : "basic.setBaud", PassthroughResponse);
+    }
+
+    private void AddMenuBarButtons()
+    {
+        ToolStripButton MenuButton(string key, Action onClick)
         {
-            int sel = Math.Max(_cmbSensorId.SelectedIndex, 0);
-            _cmbSensorId.Items.Clear();
-            foreach (var (id, nameKey) in SensorIds) _cmbSensorId.Items.Add($"{id} - {Loc.T(nameKey)}");
-            _cmbSensorId.SelectedIndex = sel;
-        });
-        strip.Items.Add(_cmbSensorId);
+            var button = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(6, 1, 0, 2) };
+            Bind(() => button.Text = Loc.T(key));
+            button.Click += (_, _) => onClick();
+            return button;
+        }
 
-        _cmbSensorAction.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbSensorAction.Font = AppFonts.ToolbarRowDropdown;
-        _cmbSensorAction.AutoSize = false;
-        _cmbSensorAction.Width = 90;
-        Bind(() =>
-        {
-            int sel = Math.Max(_cmbSensorAction.SelectedIndex, 0);
-            _cmbSensorAction.Items.Clear();
-            _cmbSensorAction.Items.Add(Loc.T("basic.on"));
-            _cmbSensorAction.Items.Add(Loc.T("basic.off"));
-            _cmbSensorAction.SelectedIndex = sel;
-        });
-        strip.Items.Add(_cmbSensorAction);
+        _menuStrip.Items.Add(MenuButton("cfg.sensors", () => RunCommandDialog(new SensorConfigDialog(SensorIds), "popup.sensorControl")));
+        _menuStrip.Items.Add(MenuButton("cfg.device", OpenDeviceSettings));
+        _menuStrip.Items.Add(MenuButton("basic.showSensorList", () => RunQuery("AT+C?", "popup.sensorList", ParseSensorListResponse)));
+        _menuStrip.Items.Add(MenuButton("basic.systemStatus", () => RunQuery("AT+S?", "popup.status", ParseStatusResponse)));
+        _menuStrip.Items.Add(MenuButton("basic.help", () => RunQuery("AT?", "popup.help", ParseHelpResponse)));
 
-        var btnApply = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
-        Bind(() => btnApply.Text = Loc.T("basic.apply"));
-        btnApply.Click += (_, _) =>
-        {
-            int id = SensorIds[_cmbSensorId.SelectedIndex].Id;
-            string action = SensorActionCommands[_cmbSensorAction.SelectedIndex];
-            RunQuery($"AT+C={id:D2},{action}", "popup.sensorControl", PassthroughResponse);
-        };
-        strip.Items.Add(btnApply);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var lblSerial = new ToolStripLabel(); Bind(() => lblSerial.Text = Loc.T("basic.serialLabel"));
-        strip.Items.Add(lblSerial);
-        _txtSerialSet.Width = 80;
-        strip.Items.Add(_txtSerialSet);
-        var btnSetSerial = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
-        Bind(() => btnSetSerial.Text = Loc.T("basic.setSerial"));
-        btnSetSerial.Click += (_, _) =>
-        {
-            if (_txtSerialSet.Text.Length > 0 && _txtSerialSet.Text.All(char.IsDigit))
-            {
-                RunQuery($"AT+SN={_txtSerialSet.Text}", "basic.setSerial", PassthroughResponse);
-            }
-            else
-            {
-                MessageBox.Show(this, Loc.T("msg.invalidSerial"), Loc.T("msg.invalidSerialTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        };
-        strip.Items.Add(btnSetSerial);
-
-        strip.Items.Add(new ToolStripSeparator());
-        _cmbBaudSet.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbBaudSet.Font = AppFonts.ToolbarRowDropdown;
-        _cmbBaudSet.Items.AddRange(new object[] { "9600", "19200", "38400", "57600", "115200" });
-        _cmbBaudSet.SelectedIndex = 0;
-        AutoSizeCombo(_cmbBaudSet);
-        strip.Items.Add(_cmbBaudSet);
-        var btnSetBaud = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text, Margin = new Padding(2, 1, 0, 2) };
-        Bind(() => btnSetBaud.Text = Loc.T("basic.setBaud"));
-        btnSetBaud.Click += (_, _) => RunQuery($"AT+SB={_cmbBaudSet.SelectedIndex}", "basic.setBaud", PassthroughResponse);
-        strip.Items.Add(btnSetBaud);
-
-        strip.Items.Add(new ToolStripSeparator());
-        var btnSensorList = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        Bind(() => btnSensorList.Text = Loc.T("basic.showSensorList"));
-        btnSensorList.Click += (_, _) => RunQuery("AT+C?", "popup.sensorList", ParseSensorListResponse);
-        strip.Items.Add(btnSensorList);
-
-        var btnStatus = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        Bind(() => btnStatus.Text = Loc.T("basic.systemStatus"));
-        btnStatus.Click += (_, _) => RunQuery("AT+S?", "popup.status", ParseStatusResponse);
-        strip.Items.Add(btnStatus);
-
-        var btnHelp = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        Bind(() => btnHelp.Text = Loc.T("basic.help"));
-        btnHelp.Click += (_, _) => RunQuery("AT?", "popup.help", ParseHelpResponse);
-        strip.Items.Add(btnHelp);
-
-        strip.Items.Add(new ToolStripSeparator());
         _btnAdvancedToggle.DisplayStyle = ToolStripItemDisplayStyle.Text;
+        _btnAdvancedToggle.Margin = new Padding(6, 1, 0, 2);
         Bind(() => _btnAdvancedToggle.Text = _advancedVisible ? Loc.T("basic.advancedHide") : Loc.T("basic.advancedShow"));
         _btnAdvancedToggle.Click += (_, _) => SetAdvancedVisible(!_advancedVisible);
-        strip.Items.Add(_btnAdvancedToggle);
-
-        var btnCalibToggle = new ToolStripButton { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        Bind(() => btnCalibToggle.Text = _calibrationPage.Visible ? Loc.T("nav.back") : Loc.T("nav.calibration"));
-        btnCalibToggle.Click += (_, _) =>
-        {
-            if (_calibrationPage.Visible) ShowBasicPage(); else ShowCalibrationPage();
-            RefreshTexts();
-        };
-        strip.Items.Add(btnCalibToggle);
-
-        return strip;
+        _menuStrip.Items.Add(_btnAdvancedToggle);
     }
 
     private async Task RunCommand(string command, string? titleKey, Func<string, string?>? parse)
@@ -724,7 +736,7 @@ public sealed class MainForm : Form
         {
             if (titleKey is not null)
             {
-                MessageBox.Show(this, Loc.T("msg.commError"), Loc.T(titleKey), MessageBoxButtons.OK, MessageBoxIcon.Error);
+                CenteredMessage.Show(this, Loc.T("msg.commError"), Loc.T(titleKey), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             return;
         }
@@ -747,7 +759,7 @@ public sealed class MainForm : Form
                     if (captured is not null) result = parse(StripTestFrames(captured));
                 }
 
-                MessageBox.Show(
+                CenteredMessage.Show(
                     this,
                     result ?? Loc.T("msg.commError"),
                     Loc.T(titleKey),
@@ -773,6 +785,181 @@ public sealed class MainForm : Form
     private async void RunQuery(string command, string titleKey, Func<string, string?> parse) => await RunCommand(command, titleKey, parse);
 
     private Task RunCommandSilent(string command) => RunCommand(command, null, null);
+
+    /// <summary>Sends the command and parses the reply without touching the running stream. Caller must hold <see cref="_queryInProgress"/>.</summary>
+    private async Task<T?> CaptureParsedAsync<T>(string command, Func<string, T?> parse, int attempts = 3) where T : class
+    {
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            string? captured = await CaptureResponseAsync(command, idleMs: 500);
+            if (captured is null) continue;
+            T? result = parse(StripTestFrames(captured));
+            if (result is not null) return result;
+        }
+        return null;
+    }
+
+    /// <summary>Runs <paramref name="body"/> while connected and in AT command mode. Returns false if it could not start.</summary>
+    private async Task<bool> RunInCommandModeAsync(Func<Task> body)
+    {
+        if (_queryInProgress) return false;
+        if (_port is not { IsOpen: true })
+        {
+            CenteredMessage.Show(this, Loc.T("msg.notConnected"), Loc.T("msg.calibTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        _queryInProgress = true;
+        UseWaitCursor = true;
+        try
+        {
+            if (_lastMode != LinkMode.Command && !await TryEnterCommandModeAsync())
+            {
+                CenteredMessage.Show(this, Loc.T("msg.commandModeFailed"), Loc.T("msg.calibTitle"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+            await body();
+            return true;
+        }
+        finally
+        {
+            _queryInProgress = false;
+            UseWaitCursor = false;
+            RefreshTexts();
+        }
+    }
+
+    private sealed record CalibOnReply(bool Accepted);
+
+    private static CalibOnReply? ParseCalibOnReply(string raw) =>
+        raw.Contains("CALIB PACK ON") ? new CalibOnReply(true)
+        : raw.Contains("ERROR") ? new CalibOnReply(false)
+        : null;
+
+    private async Task EnterCalibrationAsync()
+    {
+        await RunInCommandModeAsync(async () =>
+        {
+            var reply = await CaptureParsedAsync("AT+CALIB=1", ParseCalibOnReply);
+            if (reply is { Accepted: true })
+            {
+                // The firmware stops the test stream when the calibration pack starts.
+                _calibUnsupported = false;
+                _lastCalibActive = true;
+                _lastTestActive = false;
+                _lastFrameUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                // Older firmware has no calibration pack: stay on the test pack and show its values read-only.
+                _calibUnsupported = true;
+                AppendTerminal("--- " + Loc.T("calib.unsupported") + " ---\r\n", Color.Orange);
+                if (!_lastTestActive) await SetTestModeAsync(active: true);
+            }
+
+            ApplyCalibrationAvailability();
+            ShowCalibrationPage();
+        });
+    }
+
+    private async Task ExitCalibrationAsync()
+    {
+        if (_queryInProgress) return;
+        if (_port is { IsOpen: true })
+        {
+            await RunInCommandModeAsync(async () =>
+            {
+                if (!_calibUnsupported)
+                {
+                    await CaptureParsedAsync("AT+CALIB=0", r => r.Contains("CALIB PACK OFF") ? r : null, attempts: 2);
+                    _lastCalibActive = false;
+                }
+
+                // The test page needs the test stream. BEGIN TEST also switches calibration off if AT+CALIB=0 was missed.
+                if (!_lastTestActive && !await SetTestModeAsync(active: true))
+                {
+                    CenteredMessage.Show(this, Loc.T("msg.calibExitFailed"), Loc.T("msg.calibTitle"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            });
+        }
+        ShowBasicPage();
+        RefreshTexts();
+    }
+
+    private static readonly string[] CalibrationOnlyTiles =
+        { "CalibSpeed1", "CalibSpeed2", "CalibSpeed3", "NoWindPwm", "HeaterSetpoint", "PidKp", "PidKi", "PidKd", "HeaterTemp" };
+
+    private void ApplyCalibrationAvailability()
+    {
+        _lblCalibBanner.Visible = _calibUnsupported;
+        foreach (var key in CalibrationSetters.Keys) _tiles[key].SetClickEnabled(!_calibUnsupported);
+        _btnSetZeroWind.Enabled = !_calibUnsupported;
+        if (_calibUnsupported)
+        {
+            foreach (var key in CalibrationOnlyTiles) _tiles[key].SetValue("--");
+        }
+    }
+
+    /// <summary>Applies "calibration is off" (CALIB PACK OFF, BEGIN TEST, +++ or a test pack) and leaves the calibration page if it depended on it.</summary>
+    private void MarkCalibrationOff()
+    {
+        _lastCalibActive = false;
+        if (!_calibrationPage.Visible || _calibUnsupported) return;
+        if (!_queryInProgress)
+        {
+            AppendTerminal("--- " + Loc.T("calib.endedByDevice") + " ---\r\n", Color.Orange);
+        }
+        ShowBasicPage();
+    }
+
+    private sealed record SetterReply(bool Ok, string Message);
+
+    private static SetterReply? ParseSetterReply(string raw)
+    {
+        var error = Regex.Match(raw, @"ERROR[^\r\n]*");
+        if (error.Success) return new SetterReply(false, error.Value.Trim());
+
+        var lines = raw.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToList();
+        if (!lines.Contains("OK")) return null;
+        // A capture can start or end mid-pack, leaving a fragment with a '|' that is not part of the reply.
+        string message = string.Join("\r\n", lines.Where(l => l.Length > 0 && l != "OK" && !l.StartsWith("AT", StringComparison.Ordinal) && !l.Contains('|')));
+        return new SetterReply(true, message.Length > 0 ? message : "OK");
+    }
+
+    private void OnCalibrationTileClicked(string key, InfoTile tile, string title) => RunCalibrationSetter(key, title, tile.Value);
+
+    private async void RunCalibrationSetter(string key, string title, string currentValue)
+    {
+        if (_queryInProgress || _calibUnsupported) return;
+        var setter = CalibrationSetters[key];
+
+        string? value;
+        using (var dialog = new CalibrationEditDialog(title, setter, currentValue, _tiles["HeaterPwmLive"].Value))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            value = dialog.Value;
+        }
+
+        string command = setter.BuildCommand(value);
+        SetterReply? reply = null;
+        bool ran = await RunInCommandModeAsync(async () => reply = await CaptureParsedAsync(command, ParseSetterReply));
+        if (!ran) return;
+
+        if (reply is null)
+        {
+            CenteredMessage.Show(this, Loc.T("msg.commError"), title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        else if (reply.Ok)
+        {
+            string message = Loc.DeviceReply(reply.Message);
+            string text = setter.Temporary ? $"{message}\r\n\r\n{Loc.T("dlg.notSaved")}" : message;
+            CenteredMessage.Show(this, text, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        else
+        {
+            CenteredMessage.Show(this, Loc.DeviceReply(reply.Message), title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     private async Task EnterCommandModeManualAsync()
     {
@@ -823,7 +1010,7 @@ public sealed class MainForm : Form
     private static string? PassthroughResponse(string raw)
     {
         string trimmed = raw.Trim();
-        return trimmed.Length > 0 ? trimmed : null;
+        return trimmed.Length > 0 ? Loc.DeviceReply(trimmed) : null;
     }
 
     private static readonly Regex TestFrameLine = new(@"\|[^|\r\n]*\|\r\n", RegexOptions.Compiled);
@@ -877,6 +1064,8 @@ public sealed class MainForm : Form
         var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _captureCompletion = tcs;
         _captureTimer.Interval = idleMs;
+        // Without a cap, a stream sending packs faster than idleMs would keep the capture open forever.
+        _captureDeadlineUtc = DateTime.UtcNow.AddMilliseconds(idleMs + CaptureMaxExtraMs);
         SendRaw(command);
         _captureTimer.Stop();
         _captureTimer.Start();
@@ -996,26 +1185,47 @@ public sealed class MainForm : Form
             ("LinkRain", "tile.linkRain", ""),
             ("LinkWind", "tile.linkWind", ""),
         }),
+        ("grp.thresholds", Color.FromArgb(255, 235, 217), new[]
+        {
+            ("WindSpeedSetpoint", "tile.windSpeedSetpoint", ""),
+            ("AccelThreshold", "tile.accelThreshold", "g"),
+            ("DeviceSleepInterval", "tile.sleepInterval", "@unit.min"),
+        }),
     };
 
     private (string TitleKey, Color Tint, (string Key, string NameKey, string Unit)[] Fields)[] CalibrationGroups() => new[]
     {
+        ("grp.heater", Color.FromArgb(250, 222, 222), new[]
+        {
+            ("NoWindPwm", "tile.noWindPwm", ""),
+            ("HeaterSetpoint", "tile.heaterSetpoint", ""),
+        }),
+        ("grp.pid", Color.FromArgb(255, 243, 205), new[]
+        {
+            ("PidKp", "tile.kp", ""),
+            ("PidKi", "tile.ki", ""),
+            ("PidKd", "tile.kd", ""),
+        }),
+        ("grp.live", Color.FromArgb(228, 233, 240), new[]
+        {
+            ("CalAmbientTemp", "tile.ambientTemp", "°C"),
+            ("CalWindSpeed", "tile.windSpeed", "m/s"),
+            ("HeaterPwmLive", "tile.heaterPwmLive", ""),
+            ("HeaterTemp", "tile.heaterTemp", "°C"),
+        }),
         ("grp.zeroSpeedPwm", Color.FromArgb(214, 245, 240), new[]
         {
             ("WindZeroSpeedPwm1", "tile.zeroSpeedPwm1", ""),
             ("WindZeroSpeedPwm2", "tile.zeroSpeedPwm2", ""),
             ("WindZeroSpeedPwm3", "tile.zeroSpeedPwm3", ""),
-        }),
-        ("grp.roomTempPwm", Color.FromArgb(233, 222, 245), new[]
-        {
             ("WindRoomTempPwm1", "tile.roomTempPwm1", ""),
-            ("WindRoomTempPwm3", "tile.roomTempPwm3", ""),
-            ("WindSpeedSetpoint", "tile.windSpeedSetpoint", ""),
+            ("WindRoomTempPwm2", "tile.roomTempPwm2", ""),
         }),
-        ("grp.thresholds", Color.FromArgb(255, 235, 217), new[]
+        ("grp.calibSpeed", Color.FromArgb(214, 234, 248), new[]
         {
-            ("AccelThreshold", "tile.accelThreshold", "g"),
-            ("DeviceSleepInterval", "tile.sleepInterval", "@unit.min"),
+            ("CalibSpeed1", "tile.calibSpeed1", "m/s"),
+            ("CalibSpeed2", "tile.calibSpeed2", "m/s"),
+            ("CalibSpeed3", "tile.calibSpeed3", "m/s"),
         }),
     };
 
@@ -1025,6 +1235,17 @@ public sealed class MainForm : Form
         _calibrationPage = BuildPage(CalibrationGroups());
         _calibrationPage.Dock = DockStyle.Fill;
         _calibrationPage.Visible = false;
+        _calibrationPage.Controls.Add(BuildCalibrationToolbar());
+        _lblCalibBanner.Dock = DockStyle.Top;
+        _lblCalibBanner.AutoSize = false;
+        _lblCalibBanner.Height = 34;
+        _lblCalibBanner.TextAlign = ContentAlignment.MiddleLeft;
+        _lblCalibBanner.Padding = new Padding(12, 0, 8, 0);
+        _lblCalibBanner.BackColor = Color.FromArgb(255, 236, 179);
+        _lblCalibBanner.ForeColor = Color.FromArgb(102, 60, 0);
+        _lblCalibBanner.Visible = false;
+        Bind(() => _lblCalibBanner.Text = Loc.T("calib.unsupportedBanner"));
+        _calibrationPage.Controls.Add(_lblCalibBanner);
         _basicPage = BuildPage(BasicGroups());
         _basicPage.Dock = DockStyle.Fill;
         host.Controls.Add(_calibrationPage);
@@ -1040,6 +1261,42 @@ public sealed class MainForm : Form
         });
 
         return host;
+    }
+
+    private Control BuildCalibrationToolbar()
+    {
+        var bar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            WrapContents = false,
+            BackColor = WindowGray,
+            Padding = new Padding(12, 8, 8, 0),
+        };
+
+        _btnSetZeroWind.AutoSize = true;
+        _btnSetZeroWind.Font = AppFonts.ToolbarRowText;
+        _btnSetZeroWind.Padding = new Padding(8, 2, 8, 2);
+        Bind(() => _btnSetZeroWind.Text = Loc.T("calib.setZeroWind"));
+        _btnSetZeroWind.Click += (_, _) => RunCalibrationSetter("NoWindPwm", Loc.T("calib.setZeroWind"), "--");
+        bar.Controls.Add(_btnSetZeroWind);
+
+        _btnCalibAdvanced.AutoSize = true;
+        _btnCalibAdvanced.Font = AppFonts.ToolbarRowText;
+        _btnCalibAdvanced.Padding = new Padding(8, 2, 8, 2);
+        _btnCalibAdvanced.Margin = new Padding(12, 3, 3, 3);
+        Bind(() => _btnCalibAdvanced.Text = Loc.T(_calibAdvancedVisible ? "calib.advancedHide" : "calib.advancedShow"));
+        _btnCalibAdvanced.Click += (_, _) => SetCalibrationAdvancedVisible(!_calibAdvancedVisible);
+        bar.Controls.Add(_btnCalibAdvanced);
+
+        return bar;
+    }
+
+    private void SetCalibrationAdvancedVisible(bool visible)
+    {
+        _calibAdvancedVisible = visible;
+        foreach (var key in AdvancedCalibrationGroups) _cards[key].Visible = visible;
+        RefreshTexts();
     }
 
     private void ShowCalibrationPage()
@@ -1126,12 +1383,19 @@ public sealed class MainForm : Form
             if (hasIndicator) tile.EnableIndicator();
             Bind(() => tile.SetName(Loc.T(nameKey)));
             if (isUnitKey) Bind(() => tile.SetUnit(Loc.T(unitKey)));
+            if (CalibrationSetters.ContainsKey(key))
+            {
+                tile.MakeClickable();
+                tile.TileClicked += (_, _) => OnCalibrationTileClicked(key, tile, Loc.T(nameKey));
+            }
             _tiles[key] = tile;
             inner.Controls.Add(tile);
         }
 
         card.Controls.Add(inner);
         card.Controls.Add(header);
+        if (AdvancedCalibrationGroups.Contains(titleKey)) card.Visible = _calibAdvancedVisible;
+        _cards[titleKey] = card;
         return card;
     }
 
@@ -1149,7 +1413,7 @@ public sealed class MainForm : Form
         _atStrip.Items.Add(CommandStripButton("Enter Command Mode (ATO)", EnterCommandModeManualAsync));
         _atStrip.Items.Add(CommandStripButton("Exit to Data Mode (+++)", ExitToDataModeManualAsync));
 
-        _btnTestToggle.Text = "Start Test (AT+T)";
+        Bind(() => _btnTestToggle.Text = _lastTestActive ? "Stop Test (AT+T)" : "Start Test (AT+T)");
         _btnTestToggle.DisplayStyle = ToolStripItemDisplayStyle.Text;
         _btnTestToggle.Click += (_, _) => SendRaw("AT+T");
         _atStrip.Items.Add(_btnTestToggle);
@@ -1288,8 +1552,11 @@ public sealed class MainForm : Form
                     if (_captureBuffer is not null)
                     {
                         _captureBuffer.Append(text);
-                        _captureTimer.Stop();
-                        _captureTimer.Start();
+                        if (DateTime.UtcNow < _captureDeadlineUtc)
+                        {
+                            _captureTimer.Stop();
+                            _captureTimer.Start();
+                        }
                     }
                 });
             }
@@ -1386,17 +1653,24 @@ public sealed class MainForm : Form
         SetStatusTile("LinkWind", DecodeLink(f.SensorLinkStatus, LinkWind));
     }
 
+    private void NoteFrameArrived()
+    {
+        _lastFrameUtc = DateTime.UtcNow;
+        if (_linkStale)
+        {
+            _linkStale = false;
+            AppendTerminal("--- signal restored ---\r\n", Color.Gray);
+        }
+        _frameCount++;
+        _statusFrames.Text = $"{Loc.T("status.frames")}: {_frameCount}";
+    }
+
     private void OnTestFrame(TestFrame f)
     {
         if (!IsHandleCreated || IsDisposed) return;
         BeginInvoke(() =>
         {
-            _lastFrameUtc = DateTime.UtcNow;
-            if (_linkStale)
-            {
-                _linkStale = false;
-                AppendTerminal("--- signal restored ---\r\n", Color.Gray);
-            }
+            NoteFrameArrived();
             if (!_lastTestActive) OnTestModeChanged(true);
 
             _lastFrame = f;
@@ -1409,19 +1683,55 @@ public sealed class MainForm : Form
             _tiles["WindSpeedSetpoint"].SetValue(FormatFloat(f.WindSpeedSetpoint));
             _tiles["AccelTotalG"].SetValue(FormatFloat(f.AccelTotalG));
             _tiles["AccelThreshold"].SetValue(FormatFloat(f.AccelThreshold));
-            _tiles["WindZeroSpeedPwm1"].SetValue(f.WindZeroSpeedPwm1.ToString(ci));
-            _tiles["WindZeroSpeedPwm2"].SetValue(f.WindZeroSpeedPwm2.ToString(ci));
-            _tiles["WindZeroSpeedPwm3"].SetValue(f.WindZeroSpeedPwm3.ToString(ci));
-            _tiles["WindRoomTempPwm1"].SetValue(f.WindRoomTempPwm1.ToString(ci));
-            _tiles["WindRoomTempPwm3"].SetValue(f.WindRoomTempPwm3.ToString(ci));
             _tiles["WindPwmOutput"].SetValue(f.WindPwmOutput.ToString(ci));
             _tiles["DeviceSleepInterval"].SetValue(f.DeviceSleepInterval.ToString(ci));
             _tiles["Version"].SetValue("v" + (f.Version / 100.0).ToString("0.00", ci));
             UpdateGlobalStatusTiles(f);
             UpdateSensorLinkTiles(f);
 
-            _frameCount++;
-            _statusFrames.Text = $"{Loc.T("status.frames")}: {_frameCount}";
+            // Calibration page fields the test pack also carries (the only source on older firmware).
+            _tiles["CalAmbientTemp"].SetValue(FormatFloat(f.Sht20Temperature, 1000.0));
+            _tiles["CalWindSpeed"].SetValue(FormatFloat(f.WindSpeed, 1000.0));
+            _tiles["HeaterPwmLive"].SetValue(f.WindPwmOutput.ToString(ci));
+            _tiles["WindZeroSpeedPwm1"].SetValue(f.WindZeroSpeedPwm1.ToString(ci));
+            _tiles["WindZeroSpeedPwm2"].SetValue(f.WindZeroSpeedPwm2.ToString(ci));
+            _tiles["WindZeroSpeedPwm3"].SetValue(f.WindZeroSpeedPwm3.ToString(ci));
+            _tiles["WindRoomTempPwm1"].SetValue(f.WindRoomTempPwm1.ToString(ci));
+            _tiles["WindRoomTempPwm2"].SetValue(f.WindRoomTempPwm3.ToString(ci));
+        });
+    }
+
+    private void OnCalibrationFrame(CalibrationFrame f)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            NoteFrameArrived();
+            if (!_lastCalibActive || _lastTestActive)
+            {
+                _lastCalibActive = true;
+                _lastTestActive = false;
+                RefreshTexts();
+            }
+
+            var ci = CultureInfo.InvariantCulture;
+            _tiles["CalAmbientTemp"].SetValue(FormatFloat(f.Sht20Temperature, 1000.0));
+            _tiles["CalWindSpeed"].SetValue(FormatFloat(f.WindSpeed, 1000.0));
+            _tiles["HeaterPwmLive"].SetValue(f.HeaterPwmOutput.ToString(ci));
+            _tiles["HeaterTemp"].SetValue(FormatFloat(f.HeaterTemperature));
+            _tiles["WindZeroSpeedPwm1"].SetValue(f.WindZeroSpeedPwm1.ToString(ci));
+            _tiles["WindZeroSpeedPwm2"].SetValue(f.WindZeroSpeedPwm2.ToString(ci));
+            _tiles["WindZeroSpeedPwm3"].SetValue(f.WindZeroSpeedPwm3.ToString(ci));
+            _tiles["WindRoomTempPwm1"].SetValue(f.WindRoomTempPwm1.ToString(ci));
+            _tiles["WindRoomTempPwm2"].SetValue(f.WindRoomTempPwm3.ToString(ci));
+            _tiles["CalibSpeed1"].SetValue(FormatFloat(f.CalibrationSpeed1));
+            _tiles["CalibSpeed2"].SetValue(FormatFloat(f.CalibrationSpeed2));
+            _tiles["CalibSpeed3"].SetValue(FormatFloat(f.CalibrationSpeed3));
+            _tiles["NoWindPwm"].SetValue(f.NoWindPwm.ToString(ci));
+            _tiles["HeaterSetpoint"].SetValue(FormatFloat(f.HeaterSetpoint));
+            _tiles["PidKp"].SetValue(FormatFloat(f.Kp));
+            _tiles["PidKi"].SetValue(FormatFloat(f.Ki));
+            _tiles["PidKd"].SetValue(FormatFloat(f.Kd));
         });
     }
 
@@ -1431,6 +1741,7 @@ public sealed class MainForm : Form
         BeginInvoke(() =>
         {
             _lastMode = mode;
+            if (mode == LinkMode.Data) MarkCalibrationOff();
             RefreshTexts();
         });
     }
@@ -1441,8 +1752,30 @@ public sealed class MainForm : Form
         BeginInvoke(() =>
         {
             _lastTestActive = active;
-            if (active) _lastFrameUtc = DateTime.UtcNow;
-            _btnTestToggle.Text = active ? "Stop Test (AT+T)" : "Start Test (AT+T)";
+            if (active)
+            {
+                _lastFrameUtc = DateTime.UtcNow;
+                MarkCalibrationOff();
+            }
+            RefreshTexts();
+        });
+    }
+
+    private void OnCalibrationModeChanged(bool active)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        BeginInvoke(() =>
+        {
+            if (active)
+            {
+                _lastCalibActive = true;
+                _lastTestActive = false;
+                _lastFrameUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                MarkCalibrationOff();
+            }
             RefreshTexts();
         });
     }

@@ -8,10 +8,10 @@ namespace ENTestTerminal;
 /// </summary>
 public sealed class ButtonFrameRenderer : ToolStripSystemRenderer
 {
-    private static readonly Color BorderColor = Color.FromArgb(0, 151, 167);
-    private static readonly Color FillNormal = Color.FromArgb(224, 247, 250);
-    private static readonly Color FillHover = Color.FromArgb(178, 235, 242);
-    private static readonly Color FillPressed = Color.FromArgb(128, 222, 234);
+    public static readonly Color BorderColor = Color.FromArgb(0, 151, 167);
+    public static readonly Color FillNormal = Color.FromArgb(224, 247, 250);
+    public static readonly Color FillHover = Color.FromArgb(178, 235, 242);
+    public static readonly Color FillPressed = Color.FromArgb(128, 222, 234);
 
     protected override void OnRenderButtonBackground(ToolStripItemRenderEventArgs e)
     {

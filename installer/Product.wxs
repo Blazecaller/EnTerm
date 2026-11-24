@@ -4,7 +4,7 @@
 
   <Package Name="ENterm"
            Manufacturer="ENterm Project"
-           Version="1.0.0.0"
+           Version="1.1.0.0"
            UpgradeCode="96851979-555c-4309-af5a-847c9b7ad335"
            Language="1033"
            Scope="perMachine">

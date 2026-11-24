@@ -10,7 +10,14 @@ public sealed class InfoTile : Panel
     private readonly Label _valueLabel;
     private StatusDot? _dot;
     private string _unit;
+    private string _name;
     private string _lastValue = "--";
+    private bool _clickable;
+    private Color _baseColor;
+
+    public event EventHandler? TileClicked;
+
+    public string Value => _lastValue;
 
     public InfoTile(string name, string unit, Color tint, int width = 200)
     {
@@ -19,6 +26,8 @@ public sealed class InfoTile : Panel
         BackColor = tint;
         BorderStyle = BorderStyle.FixedSingle;
         _unit = unit;
+        _name = name;
+        _baseColor = tint;
 
         _nameLabel = new Label
         {
@@ -60,7 +69,46 @@ public sealed class InfoTile : Panel
 
     public void SetName(string name)
     {
-        _nameLabel.Text = name;
+        _name = name;
+        _nameLabel.Text = _clickable && _clickEnabled ? $"{name}  ✎" : name;
+    }
+
+    public void MakeClickable()
+    {
+        if (_clickable) return;
+        _clickable = true;
+
+        foreach (Control c in new Control[] { this, _nameLabel, _valueLabel })
+        {
+            c.Click += (_, e) =>
+            {
+                if (_clickEnabled) TileClicked?.Invoke(this, e);
+            };
+            c.MouseEnter += (_, _) => SetHover(true);
+            c.MouseLeave += (_, _) => SetHover(ClientRectangle.Contains(PointToClient(Cursor.Position)));
+        }
+        SetClickEnabled(true);
+    }
+
+    private bool _clickEnabled = true;
+
+    public void SetClickEnabled(bool enabled)
+    {
+        if (!_clickable) return;
+        _clickEnabled = enabled;
+        foreach (Control c in new Control[] { this, _nameLabel, _valueLabel })
+        {
+            c.Cursor = enabled ? Cursors.Hand : Cursors.Default;
+        }
+        SetName(_name);
+        SetHover(false);
+    }
+
+    private void SetHover(bool hover)
+    {
+        BackColor = hover && _clickEnabled
+            ? Color.FromArgb(Math.Max(_baseColor.R - 22, 0), Math.Max(_baseColor.G - 22, 0), Math.Max(_baseColor.B - 22, 0))
+            : _baseColor;
     }
 
     public void SetUnit(string unit)
